@@ -1,0 +1,19 @@
+[server]
+hosts = 127.0.0.1:5232
+
+[auth]
+type = htpasswd
+htpasswd_filename = /home/geoff/projects/calendar/.dev-radicale/config/users
+htpasswd_encryption = bcrypt
+
+[rights]
+type = from_file
+file = /home/geoff/projects/calendar/.dev-radicale/config/rights
+
+[storage]
+filesystem_folder = /home/geoff/projects/calendar/.dev-radicale/data
+
+[sharing]
+type = files
+collection_by_map = true
+permit_create_map = true

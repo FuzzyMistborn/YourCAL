@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+/data/
+/server/data/
+/.dev-radicale/venv/
+/.dev-radicale/data/
+/.dev-radicale/*.log
+/.dev-radicale/session_secret
+/.dev-baikal/

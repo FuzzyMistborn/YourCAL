@@ -1,0 +1,275 @@
+import type {
+  Calendar,
+  CalendarObject,
+  CreateCalendarInput,
+  SyncResult,
+  TimeRange,
+  UnsubscribeResult,
+} from '@yourcal/shared'
+import { createClient } from '../dav/client.js'
+import type { DavContext } from '../dav/context.js'
+import { assertHrefSameHost } from '../dav/hostAllowlist.js'
+import {
+  basicAuthHeader,
+  deleteRadicaleSharesForPath,
+  listRadicaleSharedPaths,
+  ShareFailedError,
+  unsubscribeFromCalendar,
+} from '../dav/sharing.js'
+import { icsToCalendarObject } from '../ical/mapper.js'
+import { expandCalendarObject } from '../ical/recurrence.js'
+import type { CalendarStore, ObjectRef, RawObject, RawObjectWithHref } from './CalendarStore.js'
+import { EtagConflictError } from './errors.js'
+import { decodeId, encodeId } from './idCodec.js'
+
+export class DavCalendarStore implements CalendarStore {
+  async discoverCalendars(ctx: DavContext): Promise<Calendar[]> {
+    const client = await createClient(ctx)
+    const davCalendars = await client.fetchCalendars()
+
+    // Radicale shares are otherwise indistinguishable from owned calendars
+    // (see listRadicaleSharedPaths's doc comment) -- cross-reference against
+    // Radicale's own sharing API once per discovery call. Best-effort: an
+    // empty set just means "no Radicale shares" (including on servers with
+    // no sharing support at all, e.g. plain Baikal).
+    const radicaleSharedPaths = await listRadicaleSharedPaths(ctx)
+
+    return davCalendars
+      .filter((cal) => cal.components?.includes('VEVENT') ?? true)
+      .map((cal) => {
+        // Baikal marks a calendar shared *to* the current user with a
+        // `cs:shared` resourcetype child (vs. `cs:shared-owner` on a
+        // calendar they own) -- tsdav strips the `cs:` prefix and
+        // camelCases it to `shared`. Confirmed via real PROPFIND against
+        // Baikal; Radicale never sets this, hence the separate map lookup.
+        const resourcetypes: string[] = Array.isArray(cal.resourcetype) ? cal.resourcetype : []
+        const isBaikalShared = resourcetypes.includes('shared')
+        const isRadicaleShared = radicaleSharedPaths.has(new URL(String(cal.url)).pathname)
+
+        return {
+          id: encodeId(String(cal.url)),
+          displayName: typeof cal.displayName === 'string' ? cal.displayName : 'Untitled',
+          // Some servers (confirmed: Baikal, when no color was ever explicitly
+          // set on a calendar) return calendar-color as a genuinely empty XML
+          // element, which tsdav's XML parser turns into `{ _attributes: {...} }`
+          // rather than an empty string -- truthy, so `??` alone doesn't catch
+          // it. Radicale always returns a real color string, which is why this
+          // wasn't caught until testing against real Baikal.
+          color: typeof cal.calendarColor === 'string' && cal.calendarColor ? cal.calendarColor : '#0082c9',
+          // current-user-privilege-set discovery is out of scope for v1; treat every
+          // discovered calendar as writable and let a 403 from the server surface instead.
+          readOnly: false,
+          supportsEvents: cal.components?.includes('VEVENT') ?? true,
+          supportsTasks: cal.components?.includes('VTODO') ?? false,
+          ctag: cal.ctag ?? null,
+          isShared: isBaikalShared || isRadicaleShared,
+        }
+      })
+  }
+
+  async createCalendar(ctx: DavContext, input: CreateCalendarInput): Promise<Calendar> {
+    const client = await createClient(ctx)
+    const homeUrl = client.account?.homeUrl
+    if (!homeUrl) {
+      throw new Error('CalDAV account has no calendar-home-set URL')
+    }
+
+    const color = input.color ?? '#0082c9'
+    const url = new URL(`${crypto.randomUUID()}/`, homeUrl.endsWith('/') ? homeUrl : `${homeUrl}/`).toString()
+
+    const responses = await client.makeCalendar({
+      url,
+      props: {
+        'd:displayname': input.displayName,
+        'c:supported-calendar-component-set': {
+          'c:comp': { _attributes: { name: 'VEVENT' } },
+        },
+        'ca:calendar-color': color,
+      },
+    })
+    const failed = responses.find((r) => !r.ok)
+    if (failed) {
+      throw new Error(`Failed to create calendar: ${failed.status} ${failed.statusText}`)
+    }
+
+    return {
+      id: encodeId(url),
+      displayName: input.displayName,
+      color,
+      readOnly: false,
+      supportsEvents: true,
+      supportsTasks: false,
+      ctag: null,
+      isShared: false,
+    }
+  }
+
+  async getEvents(ctx: DavContext, calendarId: string, range: TimeRange): Promise<CalendarObject[]> {
+    const client = await createClient(ctx)
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+
+    const objects = await client.fetchCalendarObjects({
+      calendar: { url },
+      timeRange: { start: range.start, end: range.end },
+    })
+
+    const results: CalendarObject[] = []
+    for (const obj of objects) {
+      if (!obj.data || !obj.etag) continue
+      try {
+        results.push(...expandCalendarObject(obj.data, calendarId, obj.url, obj.etag, range))
+      } catch {
+        // Skip objects we can't parse (e.g. VTODO-only) rather than fail the whole range.
+        continue
+      }
+    }
+    return results
+  }
+
+  async getRawObject(ctx: DavContext, href: string): Promise<RawObject> {
+    assertHrefSameHost(ctx.baseUrl, href)
+    const client = await createClient(ctx)
+    // The calendar url itself is unused by fetchCalendarObjects when objectUrls
+    // is given, but the param shape requires one; any valid collection url works.
+    const objects = await client.fetchCalendarObjects({
+      calendar: { url: href },
+      objectUrls: [href],
+    })
+    const [obj] = objects
+    if (!obj?.data || !obj.etag) {
+      throw new Error(`Calendar object not found: ${href}`)
+    }
+    return { ics: obj.data, etag: obj.etag }
+  }
+
+  async getRawObjects(ctx: DavContext, hrefs: string[]): Promise<RawObjectWithHref[]> {
+    if (hrefs.length === 0) return []
+    for (const href of hrefs) assertHrefSameHost(ctx.baseUrl, href)
+    const client = await createClient(ctx)
+    // Same "any href works as the collection url when objectUrls is given"
+    // shape as getRawObject, just batched into a single multiget.
+    const objects = await client.fetchCalendarObjects({
+      calendar: { url: hrefs[0] },
+      objectUrls: hrefs,
+    })
+    return objects
+      .filter((obj): obj is typeof obj & { data: string; etag: string } => Boolean(obj.data && obj.etag))
+      .map((obj) => ({ href: obj.url, ics: obj.data, etag: obj.etag }))
+  }
+
+  async syncCalendar(ctx: DavContext, calendarId: string, syncToken?: string): Promise<SyncResult> {
+    const client = await createClient(ctx)
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+
+    const result = await client.smartCollectionSync({
+      // objectMultiGet is required by tsdav's webdav-sync path whenever the
+      // sync-collection REPORT reports changed hrefs -- it only returns
+      // hrefs+etags, not full ICS, so tsdav needs a way to fetch the
+      // bodies. Confirmed required by testing against real Radicale (threw
+      // "collection.objectMultiGet is required for webdav sync changes"
+      // without this).
+      collection: { url, syncToken, objectMultiGet: client.calendarMultiGet.bind(client) },
+      method: 'webdav',
+      detailedResult: true,
+    })
+
+    const changed: CalendarObject[] = []
+    const deletedUids: string[] = []
+    for (const obj of result.objects.created) {
+      if (obj.data && obj.etag) changed.push(icsToCalendarObject(obj.data, calendarId, obj.url, obj.etag))
+    }
+    for (const obj of result.objects.updated) {
+      if (obj.data && obj.etag) changed.push(icsToCalendarObject(obj.data, calendarId, obj.url, obj.etag))
+    }
+    for (const obj of result.objects.deleted) {
+      deletedUids.push(obj.url)
+    }
+
+    return {
+      syncToken: result.syncToken ?? '',
+      changed,
+      deletedUids,
+    }
+  }
+
+  async createObject(ctx: DavContext, calendarId: string, ics: string): Promise<CalendarObject> {
+    const client = await createClient(ctx)
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+    const filename = `${crypto.randomUUID()}.ics`
+
+    const response = await client.createCalendarObject({
+      calendar: { url },
+      filename,
+      iCalString: ics,
+    })
+    if (!response.ok) {
+      throw new Error(`Failed to create calendar object: ${response.status} ${response.statusText}`)
+    }
+
+    const href = new URL(filename, url.endsWith('/') ? url : `${url}/`).toString()
+    const etag = response.headers.get('etag') ?? ''
+    return icsToCalendarObject(ics, calendarId, href, etag)
+  }
+
+  async updateObject(ctx: DavContext, obj: ObjectRef, ics: string): Promise<CalendarObject> {
+    assertHrefSameHost(ctx.baseUrl, obj.href)
+    const client = await createClient(ctx)
+
+    const response = await client.updateCalendarObject({
+      calendarObject: { url: obj.href, data: ics, etag: obj.etag },
+      headers: { 'If-Match': obj.etag },
+    })
+    if (response.status === 412) {
+      throw new EtagConflictError('Calendar object changed since it was last read')
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to update calendar object: ${response.status} ${response.statusText}`)
+    }
+
+    const etag = response.headers.get('etag') ?? obj.etag
+    return icsToCalendarObject(ics, obj.calendarId, obj.href, etag)
+  }
+
+  async deleteObject(ctx: DavContext, obj: ObjectRef): Promise<void> {
+    assertHrefSameHost(ctx.baseUrl, obj.href)
+    const client = await createClient(ctx)
+    const response = await client.deleteCalendarObject({
+      calendarObject: { url: obj.href, etag: obj.etag },
+      headers: { 'If-Match': obj.etag },
+    })
+    if (response.status === 412) {
+      throw new EtagConflictError('Calendar object changed since it was last read')
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to delete calendar object: ${response.status} ${response.statusText}`)
+    }
+  }
+
+  async deleteCalendar(ctx: DavContext, calendarId: string): Promise<void> {
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+    const response = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(ctx) })
+    if (!response.ok) {
+      // ShareFailedError (not a plain Error) so the route's error handler
+      // can return a clean 422 instead of an opaque 500 -- this is the
+      // one place a delete can fail for a reason worth describing to the
+      // caller (e.g. the DAV server rejecting it), same as share/unsubscribe.
+      throw new ShareFailedError(`Failed to delete calendar: ${response.status} ${response.statusText}`)
+    }
+    // Best-effort: also remove any Radicale map shares that pointed at this
+    // collection, so a recipient doesn't see a dangling "pending" invite
+    // for a calendar that no longer exists. No Baikal equivalent needed --
+    // Baikal's own deleteCalendar already wipes every calendarinstances row
+    // (including shared ones) in the same DELETE.
+    await deleteRadicaleSharesForPath(ctx, new URL(url).pathname)
+  }
+
+  async unsubscribeCalendar(ctx: DavContext, calendarId: string): Promise<UnsubscribeResult> {
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+    return unsubscribeFromCalendar(ctx, url)
+  }
+}

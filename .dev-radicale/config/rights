@@ -1,0 +1,23 @@
+# Spike: does a second user granted access via the rights file actually
+# get CalDAV write access to another user's calendar? See
+# /home/geoff/.claude/plans/shimmering-snacking-wilkinson.md
+
+[root]
+user: .*
+collection:
+permissions: R
+
+[principal]
+user: .+
+collection: {user}
+permissions: RW
+
+[calendars]
+user: .+
+collection: {user}/[^/]+
+permissions: rw
+
+[shared-personal-for-shareduser]
+user: shareduser
+collection: testuser/personal
+permissions: rw
