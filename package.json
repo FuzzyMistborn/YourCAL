@@ -1,0 +1,23 @@
+{
+  "name": "yourcal",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "server",
+    "client",
+    "shared"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "test": "npm run test -w server",
+    "lint": "eslint . --ext .ts,.vue"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "eslint": "^9.13.0",
+    "@typescript-eslint/eslint-plugin": "^8.11.0",
+    "@typescript-eslint/parser": "^8.11.0"
+  }
+}

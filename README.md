@@ -1,0 +1,80 @@
+# YourCal
+
+A self-hosted web calendar client for CalDAV servers (tested against
+[Radicale](https://radicale.org/) and [Baikal](https://sabre.io/baikal/)).
+Your CalDAV server is the sole identity provider — there's no separate
+local user store or account system.
+
+## Features
+
+- Month/week/day views with drag-to-resize and drag-to-move events
+- Multiple calendars, per-calendar color overrides
+- Recurring events (RRULE) with weekday picker and never/count/until end
+  conditions, plus this/this-and-future/all edit and delete scopes
+- Real IANA timezone support (read and write), including across
+  DST transitions
+- Search across all calendars
+- ICS file import
+- WebCal/ICS URL subscriptions (read-only)
+- Calendar sharing between users on the same CalDAV server (Radicale
+  sharing API and Baikal `cs:share`, with an in-app accept flow)
+
+See [AGENTS.md](./AGENTS.md) for implementation details, known gaps, and
+open items.
+
+## Stack
+
+npm workspaces monorepo:
+
+- `shared` — TypeScript types shared between client and server
+- `server` — Fastify API, talks to your CalDAV server via `tsdav`
+- `client` — Vue 3 SPA (FullCalendar for the calendar grid)
+
+## Running with Docker
+
+```sh
+cp .env.example .env
+# generate a session secret and put it in .env
+openssl rand -hex 32
+```
+
+Edit `.env` (or set the equivalent variables in `docker-compose.yml`) —
+`SESSION_SECRET` is required, everything else has a sensible default. Then:
+
+```sh
+docker compose up -d --build
+```
+
+The app listens on `http://localhost:3000`. Log in with credentials for
+any CalDAV server reachable from the container (set `ALLOWED_CALDAV_HOSTS`
+to restrict which hosts it's allowed to connect to).
+
+## Running locally for development
+
+Requires Node.js and a running CalDAV server to point at.
+
+```sh
+npm install
+cp .env.example .env   # fill in SESSION_SECRET at minimum
+
+npm run dev:server   # Fastify API, with reload
+npm run dev:client   # Vite dev server for the SPA
+```
+
+Other useful scripts:
+
+```sh
+npm run build   # build shared, server, and client
+npm run test    # server test suite
+npm run lint    # eslint across the workspace
+```
+
+## Configuration
+
+All server configuration is via environment variables — see
+[.env.example](./.env.example) for the full list (session secret, CalDAV
+host allowlist, session TTL, optional SQLite read-cache).
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

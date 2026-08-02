@@ -1,0 +1,135 @@
+import type { Calendar } from '@yourcal/shared'
+import { defineStore } from 'pinia'
+import { reactive, ref } from 'vue'
+import { api } from '../api.js'
+
+const COLOR_OVERRIDE_KEY = 'calendar.colorOverrides'
+// v2: the original key stored dismissal timestamps from the browser's own
+// Date.now(), compared against Radicale's TimestampUpdated -- a different
+// clock that (confirmed by testing) can be hours off from real UTC on a
+// non-UTC host, since Radicale computes it from the server's naive local
+// time treated as UTC. Any value saved under the v1 key is permanently
+// wrong (almost always larger than any real updatedAt it's compared
+// against, so it suppresses that share forever, even after the owner
+// re-shares). Renamed rather than migrated in place -- there's no way to
+// tell a "corrupted" v1 entry from a valid one after the fact, and losing
+// a dismissal is a no-cost, self-correcting mistake (the Dismiss button
+// on PendingSharesList.vue re-hides it with a single click), whereas a
+// silently-still-wrong entry from either individual detection or a
+// blanket per-clock offset guess is not.
+const DISMISSED_PENDING_KEY = 'calendar.dismissedPendingShares.v2'
+
+function loadColorOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(COLOR_OVERRIDE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+// pathOrToken -> the dismissedAt timestamp (ms) from the unsubscribe that
+// hid it. Radicale's map "hide" has no separate "declined" state -- a
+// hidden-but-still-owner-enabled share otherwise resurfaces in the pending
+// list exactly like a fresh invite, so this suppresses any pending entry
+// whose own `updatedAt` hasn't moved past the point it was dismissed (see
+// PendingSharesList.vue and UnsubscribeResult in shared/src/index.ts).
+function loadDismissedPending(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_PENDING_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
+  } catch {
+    return {}
+  }
+}
+
+export const useCalendarsStore = defineStore('calendars', () => {
+  const calendars = ref<Calendar[]>([])
+  const enabled = reactive<Record<string, boolean>>({})
+  const colorOverrides = reactive<Record<string, string>>(loadColorOverrides())
+  const dismissedPending = reactive<Record<string, number>>(loadDismissedPending())
+  const loading = ref(false)
+
+  async function load(): Promise<void> {
+    loading.value = true
+    try {
+      calendars.value = await api.listCalendars()
+      for (const cal of calendars.value) {
+        if (!(cal.id in enabled)) enabled[cal.id] = true
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function toggle(id: string): void {
+    enabled[id] = !enabled[id]
+  }
+
+  async function create(displayName: string, color?: string): Promise<Calendar> {
+    const created = await api.createCalendar({ displayName, color })
+    calendars.value.push(created)
+    enabled[created.id] = true
+    return created
+  }
+
+  function forget(id: string): void {
+    calendars.value = calendars.value.filter((c) => c.id !== id)
+    delete enabled[id]
+    delete colorOverrides[id]
+    persistOverrides()
+  }
+
+  async function deleteCalendar(id: string): Promise<void> {
+    await api.deleteCalendar(id)
+    forget(id)
+  }
+
+  function dismissPending(pathOrToken: string, dismissedAt: number): void {
+    dismissedPending[pathOrToken] = dismissedAt
+    localStorage.setItem(DISMISSED_PENDING_KEY, JSON.stringify(dismissedPending))
+  }
+
+  async function unsubscribeCalendar(id: string): Promise<void> {
+    const result = await api.unsubscribeCalendar(id)
+    if (result.dismissedPending) {
+      dismissPending(result.dismissedPending.pathOrToken, result.dismissedPending.dismissedAt)
+    }
+    forget(id)
+  }
+
+  function colorFor(id: string): string {
+    return colorOverrides[id] ?? calendars.value.find((c) => c.id === id)?.color ?? '#0082c9'
+  }
+
+  function persistOverrides(): void {
+    localStorage.setItem(COLOR_OVERRIDE_KEY, JSON.stringify(colorOverrides))
+  }
+
+  function setColorOverride(id: string, color: string): void {
+    colorOverrides[id] = color
+    persistOverrides()
+  }
+
+  function resetColorOverride(id: string): void {
+    delete colorOverrides[id]
+    persistOverrides()
+  }
+
+  return {
+    calendars,
+    enabled,
+    colorOverrides,
+    dismissedPending,
+    loading,
+    load,
+    toggle,
+    create,
+    deleteCalendar,
+    unsubscribeCalendar,
+    dismissPending,
+    colorFor,
+    setColorOverride,
+    resetColorOverride,
+  }
+})

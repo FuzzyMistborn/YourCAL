@@ -1,0 +1,91 @@
+import type {
+  ApiError,
+  Calendar,
+  CalendarObject,
+  CreateCalendarInput,
+  CreateEventInput,
+  DeleteEventInput,
+  LoginRequest,
+  PendingShare,
+  SessionInfo,
+  ShareCalendarInput,
+  ShareCalendarResult,
+  UnsubscribeResult,
+  UpdateEventInput,
+} from '@yourcal/shared'
+
+export class ApiRequestError extends Error {
+  constructor(
+    public status: number,
+    public body: ApiError,
+  ) {
+    super(body.message)
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    ...init,
+    credentials: 'include',
+    headers: {
+      // A JSON content-type with no body (e.g. DELETE /session, which
+      // takes no request body) makes the browser reject the request
+      // outright -- only send it when there's actually a body to describe.
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
+  })
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({ error: 'unknown', message: res.statusText }))) as ApiError
+    throw new ApiRequestError(res.status, body)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+  return (await res.json()) as T
+}
+
+export const api = {
+  login: (body: LoginRequest) => request<SessionInfo>('/session', { method: 'POST', body: JSON.stringify(body) }),
+  logout: () => request<void>('/session', { method: 'DELETE' }),
+  whoami: () => request<SessionInfo>('/session'),
+  listCalendars: () => request<Calendar[]>('/calendars'),
+  createCalendar: (body: CreateCalendarInput) =>
+    request<Calendar>('/calendars', { method: 'POST', body: JSON.stringify(body) }),
+  shareCalendar: (calendarId: string, body: ShareCalendarInput) =>
+    request<ShareCalendarResult>(`/calendars/${calendarId}/share`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteCalendar: (calendarId: string) => request<void>(`/calendars/${calendarId}`, { method: 'DELETE' }),
+  unsubscribeCalendar: (calendarId: string) =>
+    request<UnsubscribeResult>(`/calendars/${calendarId}/unsubscribe`, { method: 'POST' }),
+  listPendingShares: () => request<PendingShare[]>('/sharing/pending'),
+  acceptPendingShare: (pathOrToken: string) =>
+    request<void>('/sharing/pending/accept', { method: 'POST', body: JSON.stringify({ pathOrToken }) }),
+  listEvents: (calendarId: string, start: string, end: string) =>
+    request<CalendarObject[]>(
+      `/calendars/${calendarId}/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
+  createEvent: (calendarId: string, body: CreateEventInput) =>
+    request<CalendarObject>(`/calendars/${calendarId}/events`, { method: 'POST', body: JSON.stringify(body) }),
+  updateEvent: (calendarId: string, uid: string, body: UpdateEventInput) =>
+    request<CalendarObject | { updatedSeries: CalendarObject; newSeries: CalendarObject }>(
+      `/calendars/${calendarId}/events/${encodeURIComponent(uid)}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    ),
+  deleteEvent: (calendarId: string, uid: string, body: DeleteEventInput) =>
+    request<CalendarObject | void>(`/calendars/${calendarId}/events/${encodeURIComponent(uid)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(body),
+    }),
+  search: (q: string) => request<CalendarObject[]>(`/search?q=${encodeURIComponent(q)}`),
+  importIcs: (calendarId: string, ics: string) =>
+    request<{ imported: number; total: number }>(`/calendars/${calendarId}/import`, {
+      method: 'POST',
+      body: JSON.stringify({ ics }),
+    }),
+  getSubscriptionEvents: (url: string, start: string, end: string) =>
+    request<CalendarObject[]>(
+      `/subscriptions/events?url=${encodeURIComponent(url)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
+}
