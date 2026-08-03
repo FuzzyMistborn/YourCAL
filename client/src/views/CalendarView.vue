@@ -40,6 +40,11 @@ const weekStartModel = computed<WeekStart>({
   set: (value) => settingsStore.setWeekStart(value),
 })
 
+const defaultCalendarModel = computed<string>({
+  get: () => preferredDefaultCalendarId.value,
+  set: (value) => settingsStore.setDefaultCalendarId(value),
+})
+
 const enabledCalendarIds = computed(() =>
   calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id]).map((c) => c.id),
 )
@@ -49,6 +54,13 @@ const enabledCalendarIds = computed(() =>
 // would only fail once the user actually submits.
 const writableEnabledCalendarIds = computed(() =>
   calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id] && !c.readOnly).map((c) => c.id),
+)
+// Prefer the user's saved default calendar, but fall back to the first
+// writable/enabled one if it's unset, disabled, hidden, or no longer exists.
+const preferredDefaultCalendarId = computed(() =>
+  writableEnabledCalendarIds.value.includes(settingsStore.defaultCalendarId)
+    ? settingsStore.defaultCalendarId
+    : (writableEnabledCalendarIds.value[0] ?? ''),
 )
 const calendarColors = computed(() => {
   const fromCalendars = Object.fromEntries(calendarsStore.calendars.map((c) => [c.id, calendarsStore.colorFor(c.id)]))
@@ -540,6 +552,15 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
         </select>
       </label>
 
+      <label v-if="writableEnabledCalendarIds.length > 0" class="sidebar__setting">
+        <span>Default calendar</span>
+        <select v-model="defaultCalendarModel">
+          <option v-for="id in writableEnabledCalendarIds" :key="id" :value="id">
+            {{ calendarsStore.calendars.find((c) => c.id === id)?.displayName }}
+          </option>
+        </select>
+      </label>
+
       <button
         v-if="notificationsStore.permission === 'default'"
         type="button"
@@ -586,7 +607,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     <ImportDialog
       v-if="showImportDialog"
       :calendars="calendarsStore.calendars"
-      :default-calendar-id="writableEnabledCalendarIds[0] ?? ''"
+      :default-calendar-id="preferredDefaultCalendarId"
       @imported="onImported"
       @close="showImportDialog = false"
     />
@@ -605,7 +626,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       v-if="isCreating && createSlot"
       :event="null"
       :calendars="calendarsStore.calendars"
-      :default-calendar-id="writableEnabledCalendarIds[0] ?? ''"
+      :default-calendar-id="preferredDefaultCalendarId"
       :initial-start="createSlot.start"
       :initial-end="createSlot.end"
       :initial-all-day="createSlot.allDay"

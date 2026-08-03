@@ -75,6 +75,21 @@ All server configuration is via environment variables — see
 [.env.example](./.env.example) for the full list (session secret, CalDAV
 host allowlist, session TTL, optional SQLite read-cache).
 
+## Troubleshooting
+
+**Baikal: login fails with "cannot find principalUrl"** — Baikal serves
+CalDAV under `/dav.php`, not the host root, so the login form's server
+URL needs the full path with a trailing slash, e.g.
+`https://your-baikal-host/dav.php/` (omitting the trailing slash can make
+the discovery request get redirected in a way that breaks it).
+
+**Baikal: login fails with a fast `401` even with correct credentials** —
+this app authenticates with HTTP Basic auth only. If your Baikal instance
+(or a reverse proxy in front of it) is configured to require Digest auth
+(check for a `WWW-Authenticate: Digest` response header), Basic auth
+requests will be rejected outright. Configure Baikal/your reverse proxy
+to accept Basic auth instead.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
