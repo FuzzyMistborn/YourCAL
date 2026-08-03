@@ -17,6 +17,7 @@ import {
   escapeXml,
   listRadicaleSharedPaths,
   ShareFailedError,
+  syncShareDisplayNames,
   unsubscribeFromCalendar,
 } from '../dav/sharing.js'
 import { icsToCalendarObject } from '../ical/mapper.js'
@@ -152,6 +153,12 @@ export class DavCalendarStore implements CalendarStore {
     const body = await response.text()
     if (/<[^>]*status[^>]*>[^<]*\b(4\d\d|5\d\d)\b/i.test(body)) {
       throw new ShareFailedError('Server rejected one or more calendar properties')
+    }
+
+    if (input.displayName !== undefined) {
+      // Best-effort: keeps any existing Radicale shares' stashed display
+      // name (see sharing.ts's tryRadicaleShare) in sync with the rename.
+      await syncShareDisplayNames(ctx, new URL(url).pathname, input.displayName)
     }
 
     const updated = (await this.discoverCalendars(ctx)).find((c) => c.id === calendarId)

@@ -14,17 +14,22 @@ const result = ref<ShareCalendarResult | null>(null)
 
 const shares = ref<OwnedShare[]>([])
 const sharesLoading = ref(true)
+const sharesError = ref<string | null>(null)
 const rowBusy = reactive<Record<string, boolean>>({})
 const rowError = reactive<Record<string, string>>({})
 
 async function loadShares(): Promise<void> {
   sharesLoading.value = true
+  sharesError.value = null
   try {
     shares.value = await api.listShares(props.calendarId)
-  } catch {
+  } catch (err) {
     // Non-fatal -- the invite form below still works even if the current-
-    // shares list can't be loaded (e.g. server doesn't support listing).
+    // shares list can't be loaded -- but shown explicitly rather than
+    // silently rendering as "not shared with anyone", which would look
+    // identical to a real empty state and hide a real failure.
     shares.value = []
+    sharesError.value = err instanceof ApiRequestError ? err.message : 'Could not load current shares'
   } finally {
     sharesLoading.value = false
   }
@@ -96,29 +101,33 @@ async function submit(): Promise<void> {
       </div>
 
       <template v-else>
-        <div v-if="!sharesLoading && shares.length > 0" class="shares-list">
+        <div class="shares-list">
           <span class="shares-list__label">Currently shared with</span>
-          <div v-for="share in shares" :key="share.token" class="shares-list__row">
-            <span class="shares-list__recipient" :title="share.recipient">{{ share.recipient }}</span>
-            <span v-if="!share.accepted" class="shares-list__pending">pending</span>
-            <select
-              :value="share.permission"
-              :disabled="rowBusy[share.token]"
-              @change="onPermissionChange(share, ($event.target as HTMLSelectElement).value as SharePermission)"
-            >
-              <option value="readwrite">Can edit</option>
-              <option value="read">View only</option>
-            </select>
-            <button
-              type="button"
-              class="btn btn-ghost shares-list__revoke"
-              :disabled="rowBusy[share.token]"
-              title="Revoke access"
-              @click="onRevoke(share)"
-            >
-              ×
-            </button>
-          </div>
+          <p v-if="sharesLoading" class="shares-list__empty">Loading…</p>
+          <p v-else-if="shares.length === 0" class="shares-list__empty">Not shared with anyone yet.</p>
+          <template v-else>
+            <div v-for="share in shares" :key="share.token" class="shares-list__row">
+              <span class="shares-list__recipient" :title="share.recipient">{{ share.recipient }}</span>
+              <span v-if="!share.accepted" class="shares-list__pending">pending</span>
+              <select
+                :value="share.permission"
+                :disabled="rowBusy[share.token]"
+                @change="onPermissionChange(share, ($event.target as HTMLSelectElement).value as SharePermission)"
+              >
+                <option value="readwrite">Can edit</option>
+                <option value="read">View only</option>
+              </select>
+              <button
+                type="button"
+                class="btn btn-ghost shares-list__revoke"
+                :disabled="rowBusy[share.token]"
+                title="Revoke access"
+                @click="onRevoke(share)"
+              >
+                ×
+              </button>
+            </div>
+          </template>
           <p v-for="(msg, token) in rowError" :key="token" class="dialog__error">{{ msg }}</p>
         </div>
 
@@ -191,6 +200,11 @@ async function submit(): Promise<void> {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-text-faint);
+}
+.shares-list__empty {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
 }
 .shares-list__row {
   display: flex;

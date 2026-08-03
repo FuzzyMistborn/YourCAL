@@ -21,6 +21,30 @@ export function escapeXml(value: string): string {
  * but only once the recipient *also* enables+unhides their own side,
  * which this app has no UI for yet (`pending: true`).
  */
+/**
+ * PROPFIND for a calendar's own displayname, called by the owner against
+ * their own real collection URL (always accessible to them, unlike
+ * fetchShareDisplayName's PROPFIND against a *recipient's* mounted path,
+ * which 404s until that recipient has enabled+unhidden their own side --
+ * confirmed by testing, contradicting this file's older assumption that
+ * pre-acceptance PROPFIND always works).
+ */
+async function fetchCalendarDisplayName(ctx: DavContext, calendarUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(calendarUrl, {
+      method: 'PROPFIND',
+      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
+    })
+    if (!res.ok) return null
+    const xml = await res.text()
+    const parsed = xml2js(xml, { compact: true, ignoreDeclaration: true }) as Record<string, unknown>
+    return findDisplayName(parsed)
+  } catch {
+    return null
+  }
+}
+
 async function tryRadicaleShare(
   ctx: DavContext,
   calendarUrl: string,
@@ -36,6 +60,19 @@ async function tryRadicaleShare(
     Accept: 'application/json',
   }
 
+  // Stashed into the share record itself (Radicale's Properties overlay
+  // field, RFC-whitelisted to a handful of props incl. D:displayname) so
+  // the recipient can see the real calendar name in their pending-shares
+  // list *before* accepting -- confirmed by testing that the owner can set
+  // this regardless of the server's permit_properties_overlay config (that
+  // flag only gates whether Radicale *applies* the overlay to live PROPFIND
+  // responses through the mounted path, not whether the value is stored/
+  // readable via map/list, which both sides already read for other fields).
+  // Best-effort: a calendar with no displayname yet (or a PROPFIND failure)
+  // just means no Properties are sent, not a failure of the whole share.
+  const displayName = await fetchCalendarDisplayName(ctx, calendarUrl)
+  const properties = displayName ? { 'D:displayname': displayName } : undefined
+
   const create = await fetch(`${ctx.baseUrl}/.sharing/v1/map/create`, {
     method: 'POST',
     headers,
@@ -44,6 +81,7 @@ async function tryRadicaleShare(
       PathMapped: calPath,
       User: input.recipient,
       Permissions: permissions,
+      ...(properties ? { Properties: properties } : {}),
     }),
   })
 
@@ -80,7 +118,11 @@ async function tryRadicaleShare(
     const update = await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ PathOrToken: existingPathOrToken, Permissions: permissions }),
+      body: JSON.stringify({
+        PathOrToken: existingPathOrToken,
+        Permissions: permissions,
+        ...(properties ? { Properties: properties } : {}),
+      }),
     })
     if (!update.ok) {
       throw new ShareFailedError(`Radicale map/update failed: ${update.status}`)
@@ -243,6 +285,7 @@ interface RadicaleMapEntry {
   EnabledByUser?: boolean
   HiddenByUser?: boolean
   TimestampUpdated?: number
+  Properties?: Record<string, string> | null
 }
 
 async function fetchRadicaleMapList(ctx: DavContext): Promise<RadicaleMapEntry[]> {
@@ -274,6 +317,33 @@ async function fetchRadicaleMapList(ctx: DavContext): Promise<RadicaleMapEntry[]
  * `listRadicaleSharedPaths` -- the calendar is already gone by the time
  * this runs, so a failure here is a hygiene issue, not a correctness one.
  */
+/**
+ * Keeps a calendar's stashed display-name overlay (see tryRadicaleShare's
+ * doc comment) in sync when the owner renames it after already sharing it
+ * out -- otherwise a recipient's pending-shares list keeps showing the
+ * name it had *at share time* forever, since Radicale only stores this as
+ * a point-in-time copy on the share record, not a live reference. Called
+ * from DavCalendarStore.updateCalendar right after a successful PROPPATCH.
+ * Best-effort/fails-open: a rename shouldn't fail just because this
+ * bookkeeping call did.
+ */
+export async function syncShareDisplayNames(ctx: DavContext, pathMapped: string, displayName: string): Promise<void> {
+  const entries = await fetchRadicaleMapList(ctx)
+  const owned = entries.filter((e) => e.Owner === ctx.username && e.PathMapped === pathMapped && e.PathOrToken)
+  const headers = { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' }
+  for (const entry of owned) {
+    try {
+      await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ PathOrToken: entry.PathOrToken, Properties: { 'D:displayname': displayName } }),
+      })
+    } catch {
+      // best-effort, see doc comment above
+    }
+  }
+}
+
 export async function deleteRadicaleSharesForPath(ctx: DavContext, pathMapped: string): Promise<void> {
   const entries = await fetchRadicaleMapList(ctx)
   const owned = entries.filter((e) => e.Owner === ctx.username && e.PathMapped === pathMapped && e.PathOrToken)
@@ -505,6 +575,18 @@ async function fetchShareDisplayName(ctx: DavContext, pathOrToken: string): Prom
  * there's no separate "declined" state in Radicale's model, only hidden
  * vs. not.
  */
+// A collection's path segment is only a presentable label when it's a
+// hand-typed slug (e.g. "personal"/"work") -- calendars created *through
+// this app* get a `crypto.randomUUID()` slug (see DavCalendarStore.createCalendar),
+// which is meaningless to show a recipient even after the owner has since
+// renamed the calendar via PATCH (the collection's URL path never changes on
+// rename, only its displayname property). Confirmed by testing: a share
+// still hidden on the recipient's own side 404s on a direct PROPFIND against
+// its PathOrToken (contrary to this file's own older assumption that this
+// always works pre-acceptance -- apparently server/version/state dependent),
+// so the UUID-slug fallback is genuinely reachable, not just theoretical.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function listPendingRadicaleShares(ctx: DavContext): Promise<PendingShare[]> {
   const entries = await fetchRadicaleMapList(ctx)
   const pending = entries
@@ -512,17 +594,22 @@ export async function listPendingRadicaleShares(ctx: DavContext): Promise<Pendin
     .filter((entry) => !(entry.EnabledByUser && !entry.HiddenByUser))
 
   return Promise.all(
-    pending.map(async (entry) => ({
-      pathOrToken: entry.PathOrToken!,
-      owner: entry.Owner ?? 'unknown',
-      label:
-        (await fetchShareDisplayName(ctx, entry.PathOrToken!)) ??
-        entry.PathMapped?.split('/').filter(Boolean).pop() ??
-        'calendar',
-      // Radicale reports this in unix seconds; the client compares it
-      // against JS `Date.now()`-based dismissal timestamps, so convert to ms.
-      updatedAt: (entry.TimestampUpdated ?? 0) * 1000,
-    })),
+    pending.map(async (entry) => {
+      const pathSegment = entry.PathMapped?.split('/').filter(Boolean).pop()
+      const pathLabel = pathSegment && !UUID_RE.test(pathSegment) ? pathSegment : null
+      return {
+        pathOrToken: entry.PathOrToken!,
+        owner: entry.Owner ?? 'unknown',
+        label:
+          entry.Properties?.['D:displayname'] ??
+          (await fetchShareDisplayName(ctx, entry.PathOrToken!)) ??
+          pathLabel ??
+          'Shared calendar',
+        // Radicale reports this in unix seconds; the client compares it
+        // against JS `Date.now()`-based dismissal timestamps, so convert to ms.
+        updatedAt: (entry.TimestampUpdated ?? 0) * 1000,
+      }
+    }),
   )
 }
 
