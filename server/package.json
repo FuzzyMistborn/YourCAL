@@ -11,7 +11,7 @@
   "dependencies": {
     "@yourcal/shared": "*",
     "@fastify/secure-session": "^8.1.1",
-    "@fastify/static": "^8.0.2",
+    "@fastify/static": "^10.1.2",
     "@touch4it/ical-timezones": "^1.9.0",
     "better-sqlite3": "^13.0.1",
     "fastify": "^5.1.0",
@@ -23,8 +23,8 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/luxon": "^3.4.2",
-    "@types/node": "^22.8.6",
+    "@types/node": "^26.1.2",
     "tsx": "^4.19.2",
-    "vitest": "^2.1.4"
+    "vitest": "^4.1.10"
   }
 }
