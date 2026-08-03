@@ -113,6 +113,10 @@ async function submit(): Promise<void> {
   border: none;
   border-radius: 50%;
 }
+.dialog__swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
 .dialog__error {
   margin: 0 0 0.75rem;
   font-size: 0.8rem;

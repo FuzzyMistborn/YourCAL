@@ -717,6 +717,10 @@ onMounted(() => {
   border: none;
   border-radius: 50%;
 }
+.color-swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
 .color-reset {
   font-size: 0.75rem;
   padding: 0.2rem 0.3rem;

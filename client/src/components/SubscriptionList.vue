@@ -208,6 +208,10 @@ ul {
   border: none;
   border-radius: 50%;
 }
+.subscription-list__swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
 .subscription-list__remove {
   flex-shrink: 0;
   padding: 0 0.2rem;

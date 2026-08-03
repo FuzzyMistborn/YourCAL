@@ -165,6 +165,10 @@ ul {
   border: none;
   border-radius: 50%;
 }
+.calendar-list__swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
 .calendar-list__new-btn {
   margin-top: 0.5rem;
   width: 100%;

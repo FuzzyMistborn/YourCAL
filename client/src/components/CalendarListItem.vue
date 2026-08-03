@@ -170,6 +170,10 @@ input[type='checkbox'] {
   border: none;
   border-radius: 50%;
 }
+.calendar-list__swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
 .calendar-list__menu-wrap {
   position: relative;
   flex-shrink: 0;
