@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { SharePermission, ShareCalendarResult } from '@yourcal/shared'
-import { ref } from 'vue'
+import type { OwnedShare, SharePermission, ShareCalendarResult } from '@yourcal/shared'
+import { onMounted, reactive, ref } from 'vue'
 import { api, ApiRequestError } from '../api.js'
 
 const props = defineProps<{ calendarId: string; calendarName: string }>()
@@ -12,6 +12,52 @@ const submitting = ref(false)
 const error = ref<string | null>(null)
 const result = ref<ShareCalendarResult | null>(null)
 
+const shares = ref<OwnedShare[]>([])
+const sharesLoading = ref(true)
+const rowBusy = reactive<Record<string, boolean>>({})
+const rowError = reactive<Record<string, string>>({})
+
+async function loadShares(): Promise<void> {
+  sharesLoading.value = true
+  try {
+    shares.value = await api.listShares(props.calendarId)
+  } catch {
+    // Non-fatal -- the invite form below still works even if the current-
+    // shares list can't be loaded (e.g. server doesn't support listing).
+    shares.value = []
+  } finally {
+    sharesLoading.value = false
+  }
+}
+onMounted(loadShares)
+
+async function onPermissionChange(share: OwnedShare, newPermission: SharePermission): Promise<void> {
+  rowBusy[share.token] = true
+  delete rowError[share.token]
+  try {
+    await api.updateSharePermission(props.calendarId, share.token, newPermission)
+    share.permission = newPermission
+  } catch (err) {
+    rowError[share.token] = err instanceof ApiRequestError ? err.message : 'Failed to update permission'
+  } finally {
+    rowBusy[share.token] = false
+  }
+}
+
+async function onRevoke(share: OwnedShare): Promise<void> {
+  if (!confirm(`Stop sharing with ${share.recipient}?`)) return
+  rowBusy[share.token] = true
+  delete rowError[share.token]
+  try {
+    await api.revokeShare(props.calendarId, share.token)
+    shares.value = shares.value.filter((s) => s.token !== share.token)
+  } catch (err) {
+    rowError[share.token] = err instanceof ApiRequestError ? err.message : 'Failed to revoke share'
+  } finally {
+    rowBusy[share.token] = false
+  }
+}
+
 async function submit(): Promise<void> {
   if (!recipient.value.trim()) return
   submitting.value = true
@@ -21,6 +67,7 @@ async function submit(): Promise<void> {
       recipient: recipient.value.trim(),
       permission: permission.value,
     })
+    await loadShares()
   } catch (err) {
     error.value = err instanceof ApiRequestError ? err.message : 'Failed to share calendar'
   } finally {
@@ -48,7 +95,34 @@ async function submit(): Promise<void> {
         </div>
       </div>
 
-      <form v-else @submit.prevent="submit">
+      <template v-else>
+        <div v-if="!sharesLoading && shares.length > 0" class="shares-list">
+          <span class="shares-list__label">Currently shared with</span>
+          <div v-for="share in shares" :key="share.token" class="shares-list__row">
+            <span class="shares-list__recipient" :title="share.recipient">{{ share.recipient }}</span>
+            <span v-if="!share.accepted" class="shares-list__pending">pending</span>
+            <select
+              :value="share.permission"
+              :disabled="rowBusy[share.token]"
+              @change="onPermissionChange(share, ($event.target as HTMLSelectElement).value as SharePermission)"
+            >
+              <option value="readwrite">Can edit</option>
+              <option value="read">View only</option>
+            </select>
+            <button
+              type="button"
+              class="btn btn-ghost shares-list__revoke"
+              :disabled="rowBusy[share.token]"
+              title="Revoke access"
+              @click="onRevoke(share)"
+            >
+              ×
+            </button>
+          </div>
+          <p v-for="(msg, token) in rowError" :key="token" class="dialog__error">{{ msg }}</p>
+        </div>
+
+        <form @submit.prevent="submit">
         <p class="dialog__message">
           Enter the recipient's username (Radicale) or email address (Baikal) -- this app tries both, since it
           depends on which CalDAV server you're using.
@@ -71,7 +145,8 @@ async function submit(): Promise<void> {
             {{ submitting ? 'Sharing…' : 'Share' }}
           </button>
         </div>
-      </form>
+        </form>
+      </template>
     </div>
   </div>
 </template>
@@ -104,6 +179,55 @@ async function submit(): Promise<void> {
   margin: 0.5rem 0 1rem;
   color: var(--color-text-muted);
   font-size: 0.85rem;
+}
+.shares-list {
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.shares-list__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+.shares-list__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.shares-list__recipient {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+.shares-list__pending {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--color-text-faint);
+}
+.shares-list__row select {
+  flex-shrink: 0;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: inherit;
+}
+.shares-list__revoke {
+  flex-shrink: 0;
+  padding: 0 0.3rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--color-text-faint);
+}
+.shares-list__revoke:hover {
+  color: var(--color-danger);
 }
 .dialog__field {
   display: flex;

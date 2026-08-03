@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useCalendarsStore } from '../stores/calendars.js'
 import CalendarListItem from './CalendarListItem.vue'
 import PendingSharesList from './PendingSharesList.vue'
+import RenameCalendarDialog from './RenameCalendarDialog.vue'
 import ShareCalendarDialog from './ShareCalendarDialog.vue'
 
 const store = useCalendarsStore()
@@ -13,6 +14,11 @@ const sharedCalendars = computed(() => store.calendars.filter((c) => c.isShared)
 const sharingCalendar = ref<{ id: string; name: string } | null>(null)
 function onShareClick(id: string, name: string): void {
   sharingCalendar.value = { id, name }
+}
+
+const renamingCalendar = ref<{ id: string; name: string; color: string } | null>(null)
+function onRenameClick(id: string, name: string, color: string): void {
+  renamingCalendar.value = { id, name, color }
 }
 
 const showNewForm = ref(false)
@@ -53,7 +59,13 @@ async function submitNewCalendar(): Promise<void> {
 
     <h2 class="calendar-list__heading">Calendars</h2>
     <ul>
-      <CalendarListItem v-for="cal in ownCalendars" :key="cal.id" :cal="cal" @share="onShareClick" />
+      <CalendarListItem
+        v-for="cal in ownCalendars"
+        :key="cal.id"
+        :cal="cal"
+        @share="onShareClick"
+        @rename="onRenameClick"
+      />
       <li v-if="!store.loading && store.calendars.length === 0" class="calendar-list__empty">
         No calendars found.
       </li>
@@ -97,6 +109,13 @@ async function submitNewCalendar(): Promise<void> {
       :calendar-id="sharingCalendar.id"
       :calendar-name="sharingCalendar.name"
       @close="sharingCalendar = null"
+    />
+    <RenameCalendarDialog
+      v-if="renamingCalendar"
+      :calendar-id="renamingCalendar.id"
+      :calendar-name="renamingCalendar.name"
+      :calendar-color="renamingCalendar.color"
+      @close="renamingCalendar = null"
     />
   </div>
 </template>

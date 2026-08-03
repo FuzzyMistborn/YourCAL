@@ -1,5 +1,6 @@
-import type { PendingShare, ShareCalendarInput, ShareCalendarResult, UnsubscribeResult } from '@yourcal/shared'
+import type { OwnedShare, PendingShare, ShareCalendarInput, ShareCalendarResult, UnsubscribeResult } from '@yourcal/shared'
 import { xml2js } from 'xml-js'
+import { decodeId, encodeId } from '../store/idCodec.js'
 import type { DavContext } from './context.js'
 
 export class ShareFailedError extends Error {}
@@ -8,7 +9,7 @@ export function basicAuthHeader(ctx: DavContext): Record<string, string> {
   return { Authorization: 'Basic ' + Buffer.from(`${ctx.username}:${ctx.password}`).toString('base64') }
 }
 
-function escapeXml(value: string): string {
+export function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!)
 }
 
@@ -107,6 +108,19 @@ interface CsUserEntry {
   'd:href'?: { _text?: string }
   'cs:invite-accepted'?: unknown
   'cs:invite-invalid'?: unknown
+  // Per the calendarserver-sharing draft, each cs:user entry carries its
+  // own <cs:access><cs:read-write/></cs:access> (or <cs:read/>) block --
+  // NOT independently spike-tested against a live Baikal instance in this
+  // session (no PHP available in this environment, see AGENTS.md "How to
+  // run a local Baikal for testing"); this parses the documented shape and
+  // falls back to 'read' defensively if the expected child isn't found.
+  'cs:access'?: Record<string, unknown>
+}
+
+function baikalPermissionFor(entry: CsUserEntry): 'read' | 'readwrite' {
+  const access = entry['cs:access']
+  if (access && typeof access === 'object' && 'cs:read-write' in access) return 'readwrite'
+  return 'read'
 }
 
 /**
@@ -225,6 +239,7 @@ interface RadicaleMapEntry {
   Owner?: string
   PathOrToken?: string
   PathMapped?: string
+  Permissions?: string
   EnabledByUser?: boolean
   HiddenByUser?: boolean
   TimestampUpdated?: number
@@ -273,6 +288,155 @@ export async function deleteRadicaleSharesForPath(ctx: DavContext, pathMapped: s
     } catch {
       // best-effort, see doc comment above
     }
+  }
+}
+
+/**
+ * Fetches every share the current user, as owner, has created for
+ * `calendarUrl` -- the symmetric counterpart to listPendingRadicaleShares
+ * (that's the recipient's view of an unaccepted share; this is the
+ * owner's view of everything they've shared out, accepted or not).
+ * `token` is base64url-encoded (via encodeId, reused from idCodec.ts to
+ * avoid a route param containing raw slashes) and must be passed back
+ * verbatim to updateSharePermission/revokeShare.
+ */
+export async function listSharesForCalendar(ctx: DavContext, calendarUrl: string): Promise<OwnedShare[]> {
+  const path = new URL(calendarUrl).pathname
+
+  const radicaleEntries = await fetchRadicaleMapList(ctx)
+  const radicaleShares: OwnedShare[] = radicaleEntries
+    .filter((e) => e.Owner === ctx.username && e.PathMapped === path && e.User && e.PathOrToken)
+    .map((e) => ({
+      recipient: e.User!,
+      permission: e.Permissions === 'r' ? 'read' : 'readwrite',
+      accepted: Boolean(e.EnabledByUser && !e.HiddenByUser),
+      mechanism: 'radicale-map',
+      token: encodeId(e.PathOrToken!),
+    }))
+
+  let baikalShares: OwnedShare[] = []
+  try {
+    const res = await fetch(calendarUrl, {
+      method: 'PROPFIND',
+      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><d:prop><cs:invite/></d:prop></d:propfind>',
+    })
+    if (res.ok) {
+      const xml = await res.text()
+      const parsed = xml2js(xml, { compact: true, ignoreDeclaration: true }) as Record<string, unknown>
+      const invite = findCsInvite(parsed)
+      const users: CsUserEntry[] = invite
+        ? ([] as CsUserEntry[]).concat((invite as { 'cs:user'?: CsUserEntry | CsUserEntry[] })['cs:user'] ?? [])
+        : []
+      baikalShares = users
+        .filter((u) => !('cs:invite-invalid' in u) && u['d:href']?._text)
+        .map((u) => ({
+          recipient: (u['d:href']!._text as string).replace(/^mailto:/, ''),
+          permission: baikalPermissionFor(u),
+          accepted: true, // Baikal shares auto-accept, no separate acceptance step
+          mechanism: 'baikal-caldav-sharing' as const,
+          token: encodeId(u['d:href']!._text as string),
+        }))
+    }
+  } catch {
+    // Not a Baikal (or sharing-enabled) server -- no shares to report via this mechanism.
+  }
+
+  return [...radicaleShares, ...baikalShares]
+}
+
+/**
+ * Changes an existing share's permission. Which mechanism to use is
+ * decided by *positively confirming* the token matches a Radicale map
+ * entry this user owns first (never "try Radicale, and if it fails
+ * assume Baikal") -- same lesson as unsubscribeFromCalendar's "Sixth bug,
+ * CRITICAL" fix in AGENTS.md: inferring server type from a failure is not
+ * a safe basis for choosing which destructive/mutating call to make.
+ */
+export async function updateSharePermission(
+  ctx: DavContext,
+  calendarUrl: string,
+  token: string,
+  permission: 'read' | 'readwrite',
+): Promise<void> {
+  const decoded = decodeId(token)
+  const radicaleEntries = await fetchRadicaleMapList(ctx)
+  const path = new URL(calendarUrl).pathname
+  const radicaleMatch = radicaleEntries.find(
+    (e) => e.Owner === ctx.username && e.PathMapped === path && e.PathOrToken === decoded,
+  )
+
+  if (radicaleMatch) {
+    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
+      method: 'POST',
+      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ PathOrToken: decoded, Permissions: permission === 'readwrite' ? 'rw' : 'r' }),
+    })
+    if (!res.ok) throw new ShareFailedError(`Radicale map/update failed: ${res.status}`)
+    return
+  }
+
+  // Not a confirmed Radicale share -- treat as a Baikal mailto href and
+  // re-invite with a different access tag. NOT spike-tested against a live
+  // Baikal instance (no PHP available in this environment) -- if
+  // re-inviting an already-accepted recipient doesn't update permission in
+  // place, this will surface as a clear ShareFailedError below rather than
+  // silently no-opping.
+  const accessTag = permission === 'readwrite' ? '<cs:read-write/>' : '<cs:read/>'
+  const res = await fetch(calendarUrl, {
+    method: 'POST',
+    headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+    body: `<?xml version="1.0" encoding="utf-8"?>
+<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
+  <cs:set>
+    <d:href>${escapeXml(decoded)}</d:href>
+    ${accessTag}
+  </cs:set>
+</cs:share>`,
+  })
+  if (!res.ok) {
+    throw new ShareFailedError(`Could not update share permission: cs:share POST failed with ${res.status}`)
+  }
+}
+
+/**
+ * Revokes an existing share. Same positive-confirmation-first decision
+ * process as updateSharePermission above.
+ */
+export async function revokeShare(ctx: DavContext, calendarUrl: string, token: string): Promise<void> {
+  const decoded = decodeId(token)
+  const radicaleEntries = await fetchRadicaleMapList(ctx)
+  const path = new URL(calendarUrl).pathname
+  const radicaleMatch = radicaleEntries.find(
+    (e) => e.Owner === ctx.username && e.PathMapped === path && e.PathOrToken === decoded,
+  )
+
+  if (radicaleMatch) {
+    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/delete`, {
+      method: 'POST',
+      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ PathOrToken: decoded }),
+    })
+    if (!res.ok) throw new ShareFailedError(`Radicale map/delete failed: ${res.status}`)
+    return
+  }
+
+  // Not a confirmed Radicale share -- treat as a Baikal mailto href and
+  // send the sharing draft's <cs:remove> block. NOT spike-tested against a
+  // live Baikal instance in this session -- surfaces a clear
+  // ShareFailedError on any non-2xx rather than silently no-opping.
+  const res = await fetch(calendarUrl, {
+    method: 'POST',
+    headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+    body: `<?xml version="1.0" encoding="utf-8"?>
+<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
+  <cs:remove>
+    <d:href>${escapeXml(decoded)}</d:href>
+  </cs:remove>
+</cs:share>`,
+  })
+  if (!res.ok) {
+    throw new ShareFailedError(`Could not revoke share: cs:share POST failed with ${res.status}`)
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Calendar, CalendarObject, EventFields } from '@yourcal/shared'
+import type { AlarmFields, Calendar, CalendarObject, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import TimeCombobox from './TimeCombobox.vue'
@@ -64,6 +64,17 @@ const WEEKDAY_SHORT_NAMES: Record<WeekdayCode, string> = {
 // Luxon's DateTime.weekday is ISO-8601: 1 = Monday ... 7 = Sunday.
 const ISO_WEEKDAY_TO_CODE: WeekdayCode[] = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
 
+type MonthlyMode = 'dayOfMonth' | 'weekday'
+const MONTHLY_ORDINAL_LABELS: Record<number, string> = {
+  1: 'first',
+  2: 'second',
+  3: 'third',
+  4: 'fourth',
+  '-1': 'last',
+}
+// -1 means "last" (RRULE's own convention for a negative BYDAY ordinal).
+const MONTHLY_ORDINALS = [1, 2, 3, 4, -1] as const
+
 const TIME_STEP_MINUTES = 5
 
 function initialDate(iso: string): string {
@@ -82,6 +93,9 @@ interface ParsedRepeat {
   count: number
   until: string
   weekdays: WeekdayCode[]
+  monthlyMode: MonthlyMode
+  monthlyOrdinal: number
+  monthlyWeekday: WeekdayCode
 }
 
 function parseIcalUntil(until: string): string | null {
@@ -89,12 +103,19 @@ function parseIcalUntil(until: string): string | null {
   return dt.isValid ? dt.toLocal().toFormat('yyyy-LL-dd') : null
 }
 
-// Only recognizes FREQ + optional INTERVAL/COUNT/UNTIL/BYDAY (weekly only,
-// plain weekday codes -- not numeric-prefixed ones like "2MO" for "2nd
-// Monday", which is a different, unsupported pattern). Anything else falls
-// back to 'custom', which the picker shows but can't produce; keep its
-// existing rule unless the user explicitly picks a different option.
-function parseRepeat(rrule: string | null, fallbackUntil: string, defaultWeekday: WeekdayCode): ParsedRepeat {
+// Recognizes FREQ + optional INTERVAL/COUNT/UNTIL/BYDAY. BYDAY means
+// different things depending on FREQ: for weekly, a plain weekday-code list
+// (e.g. "TU,TH"); for monthly, a *single* ordinal-prefixed code (e.g. "2TU"
+// for "2nd Tuesday", "-1FR" for "last Friday" -- RRULE's own convention for
+// "last"). Anything else (yearly BYDAY, multiple monthly BYDAYs, BYSETPOS,
+// etc.) falls back to 'custom', which the picker shows but can't produce;
+// keep its existing rule unless the user explicitly picks a different option.
+function parseRepeat(
+  rrule: string | null,
+  fallbackUntil: string,
+  defaultWeekday: WeekdayCode,
+  defaultMonthlyOrdinal: number,
+): ParsedRepeat {
   const fallback: ParsedRepeat = {
     repeat: 'none',
     interval: 1,
@@ -102,6 +123,9 @@ function parseRepeat(rrule: string | null, fallbackUntil: string, defaultWeekday
     count: 1,
     until: fallbackUntil,
     weekdays: [defaultWeekday],
+    monthlyMode: 'dayOfMonth',
+    monthlyOrdinal: defaultMonthlyOrdinal,
+    monthlyWeekday: defaultWeekday,
   }
   if (!rrule) return fallback
 
@@ -119,24 +143,38 @@ function parseRepeat(rrule: string | null, fallbackUntil: string, defaultWeekday
   }
 
   let weekdays: WeekdayCode[] = [defaultWeekday]
+  let monthlyMode: MonthlyMode = 'dayOfMonth'
+  let monthlyOrdinal = defaultMonthlyOrdinal
+  let monthlyWeekday = defaultWeekday
+
   if (parts.BYDAY) {
-    if (repeat !== 'weekly') return { ...fallback, repeat: 'custom' }
-    const codes = parts.BYDAY.split(',').map((c) => c.trim().toUpperCase())
-    if (codes.length === 0 || !codes.every((c) => (WEEKDAY_CODES as readonly string[]).includes(c))) {
+    if (repeat === 'weekly') {
+      const codes = parts.BYDAY.split(',').map((c) => c.trim().toUpperCase())
+      if (codes.length === 0 || !codes.every((c) => (WEEKDAY_CODES as readonly string[]).includes(c))) {
+        return { ...fallback, repeat: 'custom' }
+      }
+      weekdays = codes as WeekdayCode[]
+    } else if (repeat === 'monthly') {
+      const match = /^(-?\d{1,2})(SU|MO|TU|WE|TH|FR|SA)$/.exec(parts.BYDAY.trim().toUpperCase())
+      if (!match) return { ...fallback, repeat: 'custom' }
+      monthlyMode = 'weekday'
+      monthlyOrdinal = parseInt(match[1], 10)
+      monthlyWeekday = match[2] as WeekdayCode
+    } else {
       return { ...fallback, repeat: 'custom' }
     }
-    weekdays = codes as WeekdayCode[]
   }
 
   const interval = parts.INTERVAL ? parseInt(parts.INTERVAL, 10) : 1
+  const base = { repeat, interval, weekdays, monthlyMode, monthlyOrdinal, monthlyWeekday }
   if (parts.COUNT) {
-    return { repeat, interval, end: 'count', count: parseInt(parts.COUNT, 10), until: fallbackUntil, weekdays }
+    return { ...base, end: 'count', count: parseInt(parts.COUNT, 10), until: fallbackUntil }
   }
   if (parts.UNTIL) {
     const until = parseIcalUntil(parts.UNTIL)
-    return until ? { repeat, interval, end: 'until', count: 1, until, weekdays } : { ...fallback, repeat: 'custom' }
+    return until ? { ...base, end: 'until', count: 1, until } : { ...fallback, repeat: 'custom' }
   }
-  return { repeat, interval, end: 'never', count: 1, until: fallbackUntil, weekdays }
+  return { ...base, end: 'never', count: 1, until: fallbackUntil }
 }
 
 const initialAllDay = props.event?.allDay ?? props.initialAllDay ?? false
@@ -153,8 +191,13 @@ const initialEndDateDisplay = initialAllDay
   : initialDate(initialEndIso)
 
 const defaultUntil = DateTime.fromISO(initialStartIso).plus({ months: 3 }).toFormat('yyyy-LL-dd')
-const defaultWeekday = ISO_WEEKDAY_TO_CODE[DateTime.fromISO(initialStartIso).weekday - 1]
-const parsedRepeat = parseRepeat(props.event?.rrule ?? null, defaultUntil, defaultWeekday)
+const startDt = DateTime.fromISO(initialStartIso)
+const defaultWeekday = ISO_WEEKDAY_TO_CODE[startDt.weekday - 1]
+// "Nth weekday of the month" ordinal for the start date's own day -- e.g.
+// Aug 11 2026 is the 2nd Tuesday, so that's the default if the user
+// switches to "on the Nth weekday" mode without picking an ordinal.
+const defaultMonthlyOrdinal = Math.ceil(startDt.day / 7)
+const parsedRepeat = parseRepeat(props.event?.rrule ?? null, defaultUntil, defaultWeekday, defaultMonthlyOrdinal)
 
 // Intl.supportedValuesOf('timeZone') returns every IANA zone name the
 // runtime knows -- no separate timezone-data dependency needed client-side.
@@ -178,7 +221,43 @@ const form = reactive({
   repeatCount: parsedRepeat.count,
   repeatUntil: parsedRepeat.until,
   repeatWeekdays: parsedRepeat.weekdays,
+  monthlyMode: parsedRepeat.monthlyMode,
+  monthlyOrdinal: parsedRepeat.monthlyOrdinal,
+  monthlyWeekday: parsedRepeat.monthlyWeekday,
+  color: props.event?.color ?? '',
+  reminders: props.event?.alarms?.map((a) => a.minutesBefore) ?? [],
+  // Extra one-off occurrence dates on top of the RRULE -- date-only
+  // ('yyyy-LL-dd'), always interpreted in form.timezone like the rest of
+  // the form's date/time fields.
+  rdates: (props.event?.rdate ?? []).map((iso) => DateTime.fromISO(iso).toFormat('yyyy-LL-dd')),
 })
+
+function addRdate(): void {
+  form.rdates.push(form.startDate)
+}
+function removeRdate(index: number): void {
+  form.rdates.splice(index, 1)
+}
+
+const REMINDER_PRESETS: { label: string; minutes: number }[] = [
+  { label: 'At time of event', minutes: 0 },
+  { label: '5 minutes before', minutes: 5 },
+  { label: '10 minutes before', minutes: 10 },
+  { label: '15 minutes before', minutes: 15 },
+  { label: '30 minutes before', minutes: 30 },
+  { label: '1 hour before', minutes: 60 },
+  { label: '1 day before', minutes: 1440 },
+]
+
+function addReminder(): void {
+  form.reminders.push(10)
+}
+function removeReminder(index: number): void {
+  form.reminders.splice(index, 1)
+}
+function buildAlarms(): AlarmFields[] {
+  return form.reminders.map((minutesBefore) => ({ minutesBefore }))
+}
 
 function toggleWeekday(code: WeekdayCode): void {
   const idx = form.repeatWeekdays.indexOf(code)
@@ -202,6 +281,10 @@ watch(
   },
 )
 
+const swatchColor = computed(
+  () => form.color || props.calendars.find((c) => c.id === form.calendarId)?.color || '#0082c9',
+)
+
 const intervalUnitLabel = computed(() => {
   if (form.repeat === 'none' || form.repeat === 'custom') return ''
   const [singular, plural] = UNIT_LABELS[form.repeat]
@@ -217,12 +300,18 @@ function buildRrule(): string | null {
   if (form.repeat === 'weekly' && form.repeatWeekdays.length > 0) {
     parts.push(`BYDAY=${form.repeatWeekdays.join(',')}`)
   }
+  if (form.repeat === 'monthly' && form.monthlyMode === 'weekday') {
+    parts.push(`BYDAY=${form.monthlyOrdinal}${form.monthlyWeekday}`)
+  }
   if (form.repeatEnd === 'count') {
     parts.push(`COUNT=${form.repeatCount}`)
   } else if (form.repeatEnd === 'until') {
+    // Parsed in form.timezone, not the browser's local zone -- otherwise a
+    // viewer in a different zone than the event would compute the wrong
+    // UNTIL instant (see onSubmit's dtStart/dtEnd for the same issue).
     const until = form.allDay
       ? DateTime.fromFormat(form.repeatUntil, 'yyyy-LL-dd')
-      : DateTime.fromFormat(`${form.repeatUntil} 23:59:59`, 'yyyy-LL-dd HH:mm:ss')
+      : DateTime.fromFormat(`${form.repeatUntil} 23:59:59`, 'yyyy-LL-dd HH:mm:ss', { zone: form.timezone })
     const untilStr = form.allDay ? until.toFormat('yyyyLLdd') : until.toUTC().toFormat("yyyyLLdd'T'HHmmss'Z'")
     parts.push(`UNTIL=${untilStr}`)
   }
@@ -237,6 +326,12 @@ const repeatPreview = computed<string | null>(() => {
   if (form.repeat === 'weekly' && form.repeatWeekdays.length > 0) {
     const ordered = WEEKDAY_CODES.filter((c) => form.repeatWeekdays.includes(c))
     text += ` on ${ordered.map((c) => WEEKDAY_SHORT_NAMES[c]).join(', ')}`
+  }
+  if (form.repeat === 'monthly' && form.monthlyMode === 'weekday') {
+    text += ` on the ${MONTHLY_ORDINAL_LABELS[form.monthlyOrdinal] ?? form.monthlyOrdinal} ${WEEKDAY_SHORT_NAMES[form.monthlyWeekday]}`
+  }
+  if (form.rdates.length > 0) {
+    text += `, plus ${form.rdates.length} extra date${form.rdates.length === 1 ? '' : 's'}`
   }
   if (form.repeatEnd === 'count') {
     text += `, ${form.repeatCount} time${form.repeatCount === 1 ? '' : 's'}`
@@ -267,20 +362,28 @@ const validationError = computed<string | null>(() => {
       return 'Select at least one day of the week.'
     }
   }
+  if (form.reminders.some((m) => m < 0 || m > 40320)) {
+    return 'Reminders must be between 0 minutes and 4 weeks before the event.'
+  }
   return null
 })
 
 function onSubmit(): void {
   if (validationError.value) return
 
+  // Parsed in form.timezone, not the browser's local zone -- otherwise a
+  // viewer in a different zone than the event edits the same wall-clock
+  // numbers but gets a different instant (e.g. a Los Angeles-based viewer
+  // entering "9:00" for a New York event would silently save it as 9am
+  // Pacific instead of 9am Eastern).
   const dtStart = form.allDay
     ? DateTime.fromFormat(form.startDate, 'yyyy-LL-dd')
-    : DateTime.fromFormat(`${form.startDate} ${form.startTime}`, 'yyyy-LL-dd HH:mm')
+    : DateTime.fromFormat(`${form.startDate} ${form.startTime}`, 'yyyy-LL-dd HH:mm', { zone: form.timezone })
   // Convert the inclusive last-day the user picked back to CalDAV's
   // exclusive end for all-day events.
   const dtEnd = form.allDay
     ? DateTime.fromFormat(form.endDate, 'yyyy-LL-dd').plus({ days: 1 })
-    : DateTime.fromFormat(`${form.endDate} ${form.endTime}`, 'yyyy-LL-dd HH:mm')
+    : DateTime.fromFormat(`${form.endDate} ${form.endTime}`, 'yyyy-LL-dd HH:mm', { zone: form.timezone })
 
   const fields: EventFields = {
     summary: form.summary,
@@ -291,6 +394,18 @@ function onSubmit(): void {
     allDay: form.allDay,
     timezone: form.allDay ? null : form.timezone,
     rrule: buildRrule(),
+    color: form.color || null,
+    alarms: buildAlarms(),
+    rdate:
+      form.repeat !== 'none' && form.rdates.length > 0
+        ? form.rdates.map(
+            (d) =>
+              (form.allDay
+                ? DateTime.fromFormat(d, 'yyyy-LL-dd')
+                : DateTime.fromFormat(d, 'yyyy-LL-dd', { zone: form.timezone })
+              ).toISO() ?? new Date().toISOString(),
+          )
+        : [],
   }
   emit('save', form.calendarId, fields)
 }
@@ -307,12 +422,28 @@ onMounted(() => {
     <form class="dialog" @submit.prevent="onSubmit" @keydown.esc="emit('close')">
       <input ref="titleInput" v-model="form.summary" class="dialog__title" type="text" placeholder="Add title" required />
 
-      <label v-if="!isEditing" class="field">
-        <span>Calendar</span>
-        <select v-model="form.calendarId">
-          <option v-for="cal in calendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
-        </select>
-      </label>
+      <div class="field-row">
+        <label v-if="!isEditing" class="field">
+          <span>Calendar</span>
+          <select v-model="form.calendarId">
+            <option v-for="cal in calendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
+          </select>
+        </label>
+        <label class="field field--color">
+          <span>Color</span>
+          <div class="color-row">
+            <input
+              type="color"
+              class="color-swatch"
+              :value="swatchColor"
+              @input="form.color = ($event.target as HTMLInputElement).value"
+            />
+            <button v-if="form.color" type="button" class="btn btn-ghost color-reset" @click="form.color = ''">
+              Use calendar color
+            </button>
+          </div>
+        </label>
+      </div>
 
       <label class="dialog__checkbox">
         <input v-model="form.allDay" type="checkbox" />
@@ -379,6 +510,35 @@ onMounted(() => {
           </div>
         </div>
 
+        <div v-if="form.repeat === 'monthly'" class="field-group">
+          <span class="field-group__label">On</span>
+          <label class="repeat-end-option">
+            <input v-model="form.monthlyMode" type="radio" value="dayOfMonth" />
+            <span>Day {{ form.startDate ? DateTime.fromFormat(form.startDate, 'yyyy-LL-dd').day : '' }} of the month</span>
+          </label>
+          <label class="repeat-end-option monthly-weekday-option">
+            <input v-model="form.monthlyMode" type="radio" value="weekday" />
+            <span>The</span>
+            <select v-model.number="form.monthlyOrdinal" :disabled="form.monthlyMode !== 'weekday'">
+              <option v-for="ord in MONTHLY_ORDINALS" :key="ord" :value="ord">{{ MONTHLY_ORDINAL_LABELS[ord] }}</option>
+            </select>
+            <select v-model="form.monthlyWeekday" :disabled="form.monthlyMode !== 'weekday'">
+              <option v-for="code in WEEKDAY_CODES" :key="code" :value="code">{{ WEEKDAY_SHORT_NAMES[code] }}</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="field-group">
+          <span class="field-group__label">Extra dates</span>
+          <div v-for="(date, index) in form.rdates" :key="index" class="reminder-row">
+            <input v-model="form.rdates[index]" type="date" />
+            <button type="button" class="btn btn-ghost reminder-remove" title="Remove date" @click="removeRdate(index)">
+              ×
+            </button>
+          </div>
+          <button type="button" class="btn btn-ghost reminder-add" @click="addRdate">+ Add extra date</button>
+        </div>
+
         <div class="field-group">
           <span class="field-group__label">Ends</span>
           <label class="repeat-end-option">
@@ -408,6 +568,21 @@ onMounted(() => {
         <p class="repeat-preview">{{ repeatPreview }}</p>
       </template>
       <p v-else-if="form.repeat === 'custom'" class="repeat-preview">{{ repeatPreview }}</p>
+
+      <div class="field-group">
+        <span class="field-group__label">Reminders</span>
+        <div v-for="(minutes, index) in form.reminders" :key="index" class="reminder-row">
+          <select v-model.number="form.reminders[index]">
+            <option v-for="preset in REMINDER_PRESETS" :key="preset.minutes" :value="preset.minutes">
+              {{ preset.label }}
+            </option>
+          </select>
+          <button type="button" class="btn btn-ghost reminder-remove" title="Remove reminder" @click="removeReminder(index)">
+            ×
+          </button>
+        </div>
+        <button type="button" class="btn btn-ghost reminder-add" @click="addReminder">+ Add reminder</button>
+      </div>
 
       <label class="field">
         <span>Location</span>
@@ -477,6 +652,63 @@ onMounted(() => {
   color: var(--color-text-muted);
   flex: 1;
   min-width: 0;
+}
+.field--color {
+  flex: 0 0 auto;
+}
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.color-swatch {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+.color-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.color-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+.color-reset {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.3rem;
+  white-space: nowrap;
+}
+.reminder-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.reminder-row select {
+  flex: 1;
+}
+.reminder-remove {
+  flex-shrink: 0;
+  padding: 0 0.4rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--color-text-faint);
+}
+.reminder-remove:hover {
+  color: var(--color-danger);
+}
+.reminder-add {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  color: var(--color-text-faint);
+  padding: 0.2rem 0.3rem;
 }
 .field-group {
   display: flex;

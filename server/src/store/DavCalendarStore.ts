@@ -5,13 +5,16 @@ import type {
   SyncResult,
   TimeRange,
   UnsubscribeResult,
+  UpdateCalendarInput,
 } from '@yourcal/shared'
 import { createClient } from '../dav/client.js'
 import type { DavContext } from '../dav/context.js'
 import { assertHrefSameHost } from '../dav/hostAllowlist.js'
+import { isCalendarReadOnly } from '../dav/privileges.js'
 import {
   basicAuthHeader,
   deleteRadicaleSharesForPath,
+  escapeXml,
   listRadicaleSharedPaths,
   ShareFailedError,
   unsubscribeFromCalendar,
@@ -33,38 +36,41 @@ export class DavCalendarStore implements CalendarStore {
     // empty set just means "no Radicale shares" (including on servers with
     // no sharing support at all, e.g. plain Baikal).
     const radicaleSharedPaths = await listRadicaleSharedPaths(ctx)
+    const eventCalendars = davCalendars.filter((cal) => cal.components?.includes('VEVENT') ?? true)
 
-    return davCalendars
-      .filter((cal) => cal.components?.includes('VEVENT') ?? true)
-      .map((cal) => {
-        // Baikal marks a calendar shared *to* the current user with a
-        // `cs:shared` resourcetype child (vs. `cs:shared-owner` on a
-        // calendar they own) -- tsdav strips the `cs:` prefix and
-        // camelCases it to `shared`. Confirmed via real PROPFIND against
-        // Baikal; Radicale never sets this, hence the separate map lookup.
-        const resourcetypes: string[] = Array.isArray(cal.resourcetype) ? cal.resourcetype : []
-        const isBaikalShared = resourcetypes.includes('shared')
-        const isRadicaleShared = radicaleSharedPaths.has(new URL(String(cal.url)).pathname)
+    // current-user-privilege-set (RFC 3744) has to be fetched with one
+    // PROPFIND per calendar -- tsdav's fetchCalendars() has no way to
+    // include it in the batched PROPFIND it already does. Run these in
+    // parallel rather than serially awaiting each one.
+    const readOnlyFlags = await Promise.all(eventCalendars.map((cal) => isCalendarReadOnly(ctx, String(cal.url))))
 
-        return {
-          id: encodeId(String(cal.url)),
-          displayName: typeof cal.displayName === 'string' ? cal.displayName : 'Untitled',
-          // Some servers (confirmed: Baikal, when no color was ever explicitly
-          // set on a calendar) return calendar-color as a genuinely empty XML
-          // element, which tsdav's XML parser turns into `{ _attributes: {...} }`
-          // rather than an empty string -- truthy, so `??` alone doesn't catch
-          // it. Radicale always returns a real color string, which is why this
-          // wasn't caught until testing against real Baikal.
-          color: typeof cal.calendarColor === 'string' && cal.calendarColor ? cal.calendarColor : '#0082c9',
-          // current-user-privilege-set discovery is out of scope for v1; treat every
-          // discovered calendar as writable and let a 403 from the server surface instead.
-          readOnly: false,
-          supportsEvents: cal.components?.includes('VEVENT') ?? true,
-          supportsTasks: cal.components?.includes('VTODO') ?? false,
-          ctag: cal.ctag ?? null,
-          isShared: isBaikalShared || isRadicaleShared,
-        }
-      })
+    return eventCalendars.map((cal, i) => {
+      // Baikal marks a calendar shared *to* the current user with a
+      // `cs:shared` resourcetype child (vs. `cs:shared-owner` on a
+      // calendar they own) -- tsdav strips the `cs:` prefix and
+      // camelCases it to `shared`. Confirmed via real PROPFIND against
+      // Baikal; Radicale never sets this, hence the separate map lookup.
+      const resourcetypes: string[] = Array.isArray(cal.resourcetype) ? cal.resourcetype : []
+      const isBaikalShared = resourcetypes.includes('shared')
+      const isRadicaleShared = radicaleSharedPaths.has(new URL(String(cal.url)).pathname)
+
+      return {
+        id: encodeId(String(cal.url)),
+        displayName: typeof cal.displayName === 'string' ? cal.displayName : 'Untitled',
+        // Some servers (confirmed: Baikal, when no color was ever explicitly
+        // set on a calendar) return calendar-color as a genuinely empty XML
+        // element, which tsdav's XML parser turns into `{ _attributes: {...} }`
+        // rather than an empty string -- truthy, so `??` alone doesn't catch
+        // it. Radicale always returns a real color string, which is why this
+        // wasn't caught until testing against real Baikal.
+        color: typeof cal.calendarColor === 'string' && cal.calendarColor ? cal.calendarColor : '#0082c9',
+        readOnly: readOnlyFlags[i],
+        supportsEvents: cal.components?.includes('VEVENT') ?? true,
+        supportsTasks: cal.components?.includes('VTODO') ?? false,
+        ctag: cal.ctag ?? null,
+        isShared: isBaikalShared || isRadicaleShared,
+      }
+    })
   }
 
   async createCalendar(ctx: DavContext, input: CreateCalendarInput): Promise<Calendar> {
@@ -102,6 +108,55 @@ export class DavCalendarStore implements CalendarStore {
       ctag: null,
       isShared: false,
     }
+  }
+
+  async updateCalendar(ctx: DavContext, calendarId: string, input: UpdateCalendarInput): Promise<Calendar> {
+    const url = decodeId(calendarId)
+    assertHrefSameHost(ctx.baseUrl, url)
+
+    // No tsdav helper exists for PROPPATCH -- hand-rolled the same way
+    // sharing.ts's raw DAV calls are, since tsdav only wraps discovery/CRUD.
+    const setProps: string[] = []
+    if (input.displayName !== undefined) {
+      setProps.push(`<d:displayname>${escapeXml(input.displayName)}</d:displayname>`)
+    }
+    if (input.color !== undefined) {
+      setProps.push(`<ca:calendar-color xmlns:ca="http://apple.com/ns/ical/">${escapeXml(input.color)}</ca:calendar-color>`)
+    }
+    if (setProps.length === 0) {
+      const existing = (await this.discoverCalendars(ctx)).find((c) => c.id === calendarId)
+      if (!existing) throw new Error(`Calendar not found: ${calendarId}`)
+      return existing
+    }
+
+    const response = await fetch(url, {
+      method: 'PROPPATCH',
+      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+      body: `<?xml version="1.0" encoding="utf-8"?>
+<d:propertyupdate xmlns:d="DAV:">
+  <d:set>
+    <d:prop>
+      ${setProps.join('\n      ')}
+    </d:prop>
+  </d:set>
+</d:propertyupdate>`,
+    })
+    if (!response.ok) {
+      throw new ShareFailedError(`Failed to update calendar: ${response.status} ${response.statusText}`)
+    }
+    // A 207 multistatus can still report a per-property failure (e.g. 403 on
+    // calendar-color if the server doesn't support it) even though the
+    // overall response is 2xx -- coarse check is enough here, matching the
+    // error-shape convention already used for delete/share failures in this
+    // file rather than fully parsing the multistatus body.
+    const body = await response.text()
+    if (/<[^>]*status[^>]*>[^<]*\b(4\d\d|5\d\d)\b/i.test(body)) {
+      throw new ShareFailedError('Server rejected one or more calendar properties')
+    }
+
+    const updated = (await this.discoverCalendars(ctx)).find((c) => c.id === calendarId)
+    if (!updated) throw new Error(`Calendar not found after update: ${calendarId}`)
+    return updated
   }
 
   async getEvents(ctx: DavContext, calendarId: string, range: TimeRange): Promise<CalendarObject[]> {
@@ -176,7 +231,7 @@ export class DavCalendarStore implements CalendarStore {
     })
 
     const changed: CalendarObject[] = []
-    const deletedUids: string[] = []
+    const deletedHrefs: string[] = []
     for (const obj of result.objects.created) {
       if (obj.data && obj.etag) changed.push(icsToCalendarObject(obj.data, calendarId, obj.url, obj.etag))
     }
@@ -184,13 +239,13 @@ export class DavCalendarStore implements CalendarStore {
       if (obj.data && obj.etag) changed.push(icsToCalendarObject(obj.data, calendarId, obj.url, obj.etag))
     }
     for (const obj of result.objects.deleted) {
-      deletedUids.push(obj.url)
+      deletedHrefs.push(obj.url)
     }
 
     return {
       syncToken: result.syncToken ?? '',
       changed,
-      deletedUids,
+      deletedHrefs,
     }
   }
 

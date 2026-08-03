@@ -9,6 +9,7 @@ import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { computed, onMounted, ref, watch } from 'vue'
 import CalendarList from '../components/CalendarList.vue'
+import ConflictDialog from '../components/ConflictDialog.vue'
 import EventDetailPopover from '../components/EventDetailPopover.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import EventEditDialog from '../components/EventEditDialog.vue'
@@ -19,6 +20,7 @@ import SubscriptionList from '../components/SubscriptionList.vue'
 import { ApiRequestError } from '../api.js'
 import { useCalendarsStore } from '../stores/calendars.js'
 import { useEventsStore } from '../stores/events.js'
+import { useNotificationsStore } from '../stores/notifications.js'
 import { useSessionStore } from '../stores/session.js'
 import { useSettingsStore, type WeekStart } from '../stores/settings.js'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
@@ -26,6 +28,7 @@ import { useSubscriptionsStore } from '../stores/subscriptions.js'
 const session = useSessionStore()
 const calendarsStore = useCalendarsStore()
 const eventsStore = useEventsStore()
+const notificationsStore = useNotificationsStore()
 const settingsStore = useSettingsStore()
 const subscriptionsStore = useSubscriptionsStore()
 
@@ -51,19 +54,36 @@ function isSubscriptionEvent(event: CalendarObject): boolean {
   return subscriptionIds.value.has(event.calendarId)
 }
 
-const fullCalendarEvents = computed(() => {
+const calendarReadOnlyMap = computed(() =>
+  Object.fromEntries(calendarsStore.calendars.map((c) => [c.id, c.readOnly])),
+)
+
+// Subscriptions are always read-only (they're not real CalDAV collections);
+// a real calendar can also be read-only if the server's own ACLs say so
+// (Calendar.readOnly, populated via current-user-privilege-set discovery).
+function isReadOnlyEvent(event: CalendarObject): boolean {
+  return isSubscriptionEvent(event) || (calendarReadOnlyMap.value[event.calendarId] ?? false)
+}
+
+const rawVisibleEvents = computed(() => {
   if (!visibleRange.value) return []
   const calendarEvents = eventsStore.eventsFor(enabledCalendarIds.value, visibleRange.value.start, visibleRange.value.end)
   const subscriptionEvents = subscriptionsStore.eventsFor(visibleRange.value.start, visibleRange.value.end)
-  return [...calendarEvents, ...subscriptionEvents].map((e) => ({
+  return [...calendarEvents, ...subscriptionEvents]
+})
+
+watch(rawVisibleEvents, (events) => notificationsStore.scheduleForEvents(events))
+
+const fullCalendarEvents = computed(() => {
+  return rawVisibleEvents.value.map((e) => ({
     id: `${e.calendarId}:${e.uid}:${e.recurrenceId ?? ''}`,
     title: e.summary,
     start: e.start,
     end: e.end,
     allDay: e.allDay,
-    backgroundColor: calendarColors.value[e.calendarId],
-    borderColor: calendarColors.value[e.calendarId],
-    editable: !isSubscriptionEvent(e),
+    backgroundColor: e.color ?? calendarColors.value[e.calendarId],
+    borderColor: e.color ?? calendarColors.value[e.calendarId],
+    editable: !isReadOnlyEvent(e),
     extendedProps: { source: e },
   }))
 })
@@ -119,7 +139,7 @@ function onDetailClose(): void {
 }
 
 function onDetailEdit(): void {
-  if (detailEvent.value && !isSubscriptionEvent(detailEvent.value)) {
+  if (detailEvent.value && !isReadOnlyEvent(detailEvent.value)) {
     editingEvent.value = detailEvent.value
   }
   onDetailClose()
@@ -127,7 +147,7 @@ function onDetailEdit(): void {
 
 function onDetailDelete(): void {
   const event = detailEvent.value
-  if (!event || isSubscriptionEvent(event)) return
+  if (!event || isReadOnlyEvent(event)) return
   onDetailClose()
   confirmingDelete.value = event
 }
@@ -185,6 +205,16 @@ function onConfirmDelete(): void {
   }
 }
 
+// --- 412 conflict resolution: a dialog-driven edit/delete that loses the
+// etag race gets a chance to see what changed and either discard or
+// reapply against the fresh etag, rather than the edit just vanishing. ---
+
+type PendingConflict =
+  | { kind: 'update'; event: CalendarObject; fields: EventFields; scope: EditScope }
+  | { kind: 'delete'; event: CalendarObject; scope: EditScope }
+const pendingConflict = ref<PendingConflict | null>(null)
+const conflictServerEvent = ref<CalendarObject | null>(null)
+
 async function doUpdate(event: CalendarObject, fields: EventFields, scope: EditScope): Promise<void> {
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
@@ -195,13 +225,13 @@ async function doUpdate(event: CalendarObject, fields: EventFields, scope: EditS
       recurrenceId: event.recurrenceId,
     })
   } catch (err) {
-    errorBanner.value =
-      err instanceof ApiRequestError && err.status === 412
-        ? 'This event changed elsewhere. The calendar has been refreshed -- please reapply your edit.'
-        : err instanceof ApiRequestError
-          ? err.message
-          : 'Failed to save event.'
-    await eventsStore.reloadLastRange()
+    if (err instanceof ApiRequestError && err.status === 412) {
+      await eventsStore.reloadLastRange()
+      conflictServerEvent.value = eventsStore.findEvent(event.calendarId, event.uid, event.recurrenceId) ?? null
+      pendingConflict.value = { kind: 'update', event, fields, scope }
+      return
+    }
+    errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to save event.'
   }
 }
 
@@ -214,13 +244,35 @@ async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> 
       recurrenceId: event.recurrenceId,
     })
   } catch (err) {
-    errorBanner.value =
-      err instanceof ApiRequestError && err.status === 412
-        ? 'This event changed elsewhere. The calendar has been refreshed -- please try again.'
-        : err instanceof ApiRequestError
-          ? err.message
-          : 'Failed to delete event.'
-    await eventsStore.reloadLastRange()
+    if (err instanceof ApiRequestError && err.status === 412) {
+      await eventsStore.reloadLastRange()
+      conflictServerEvent.value = eventsStore.findEvent(event.calendarId, event.uid, event.recurrenceId) ?? null
+      pendingConflict.value = { kind: 'delete', event, scope }
+      return
+    }
+    errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to delete event.'
+  }
+}
+
+function onConflictDiscard(): void {
+  pendingConflict.value = null
+  conflictServerEvent.value = null
+}
+
+function onConflictReapply(): void {
+  const conflict = pendingConflict.value
+  const fresh = conflictServerEvent.value
+  pendingConflict.value = null
+  conflictServerEvent.value = null
+  if (!conflict || !fresh) return
+
+  // Retry against the server's current etag/href -- last-write-wins, not a
+  // field-level merge, which is a reasonable v1 scope for a personal
+  // calendar app (see the approved plan).
+  if (conflict.kind === 'update') {
+    void doUpdate({ ...conflict.event, etag: fresh.etag, href: fresh.href }, conflict.fields, conflict.scope)
+  } else {
+    void doDelete({ ...conflict.event, etag: fresh.etag, href: fresh.href }, conflict.scope)
   }
 }
 
@@ -249,6 +301,9 @@ function toFields(event: CalendarObject, start: string, end: string): EventField
     allDay: event.allDay,
     timezone: event.timezone,
     rrule: event.rrule,
+    color: event.color,
+    alarms: event.alarms,
+    rdate: event.rdate,
   }
 }
 
@@ -439,6 +494,21 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
         </select>
       </label>
 
+      <button
+        v-if="notificationsStore.permission === 'default'"
+        type="button"
+        class="btn btn-ghost sidebar__reminders-btn"
+        @click="notificationsStore.requestPermission()"
+      >
+        🔔 Enable reminder notifications
+      </button>
+      <p v-else-if="notificationsStore.permission === 'granted'" class="sidebar__reminders-note">
+        🔔 Reminders on — only while this tab is open
+      </p>
+      <p v-else-if="notificationsStore.permission === 'denied'" class="sidebar__reminders-note">
+        🔕 Reminder notifications blocked (check browser settings)
+      </p>
+
       <div class="sidebar__user">
         <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
         <span class="sidebar__username">{{ session.info?.username }}</span>
@@ -461,7 +531,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       :calendar-name="calendarNameFor(detailEvent.calendarId)"
       :x="detailPosition.x"
       :y="detailPosition.y"
-      :read-only="isSubscriptionEvent(detailEvent)"
+      :read-only="isReadOnlyEvent(detailEvent)"
       @edit="onDetailEdit"
       @delete="onDetailDelete"
       @close="onDetailClose"
@@ -510,6 +580,15 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       :verb="pendingScopeAction.kind === 'save' ? 'Save' : 'Delete'"
       @choose="onScopeChosen"
       @cancel="pendingScopeAction = null"
+    />
+
+    <ConflictDialog
+      v-if="pendingConflict"
+      :kind="pendingConflict.kind"
+      :server-event="conflictServerEvent"
+      :attempted-summary="pendingConflict.kind === 'update' ? pendingConflict.fields.summary : ''"
+      @discard="onConflictDiscard"
+      @reapply="onConflictReapply"
     />
   </div>
 </template>
@@ -567,6 +646,18 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 .sidebar__setting select {
   padding: 0.35rem 0.5rem;
   font-size: 0.85rem;
+}
+.sidebar__reminders-btn {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  justify-content: flex-start;
+  padding: 0.3rem 0.25rem;
+}
+.sidebar__reminders-note {
+  margin: 0;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-text-faint);
 }
 .sidebar__user {
   margin-top: auto;

@@ -2,6 +2,8 @@
 import type { CalendarObject } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { api } from '../api.js'
+import { triggerDownload } from '../lib/download.js'
 
 const props = defineProps<{
   event: CalendarObject
@@ -76,6 +78,17 @@ const timezoneNote = computed(() => {
   if (props.event.allDay || !props.event.timezone) return null
   return props.event.timezone !== DateTime.local().zoneName ? props.event.timezone : null
 })
+
+function onExport(): void {
+  triggerDownload(api.eventExportUrl(props.event.calendarId, props.event.uid, props.event.href))
+}
+
+function formatReminder(minutesBefore: number): string {
+  if (minutesBefore === 0) return 'At time of event'
+  if (minutesBefore % 1440 === 0) return `${minutesBefore / 1440} day${minutesBefore === 1440 ? '' : 's'} before`
+  if (minutesBefore % 60 === 0) return `${minutesBefore / 60} hour${minutesBefore === 60 ? '' : 's'} before`
+  return `${minutesBefore} min before`
+}
 </script>
 
 <template>
@@ -90,15 +103,29 @@ const timezoneNote = computed(() => {
       <p class="popover__time">{{ timeRangeText }}</p>
       <p v-if="timezoneNote" class="popover__badge">🌐 {{ timezoneNote }}</p>
       <p v-if="event.isRecurring" class="popover__badge">🔁 Recurring event</p>
+      <p v-for="(alarm, i) in event.alarms" :key="i" class="popover__badge">⏰ {{ formatReminder(alarm.minutesBefore) }}</p>
       <p v-if="event.location" class="popover__row">📍 {{ event.location }}</p>
       <p v-if="event.description" class="popover__description">{{ event.description }}</p>
       <p class="popover__calendar">{{ calendarName }}</p>
 
-      <div v-if="!readOnly" class="popover__actions">
-        <button type="button" class="btn btn-danger popover__delete" @click="emit('delete')">Delete</button>
-        <button type="button" class="btn btn-primary" @click="emit('edit')">Edit</button>
+      <div class="popover__actions">
+        <template v-if="!readOnly">
+          <button type="button" class="btn btn-danger popover__delete" @click="emit('delete')">Delete</button>
+        </template>
+        <p v-else class="popover__badge popover__readonly">Read-only</p>
+        <!-- Subscription hrefs carry a "#uid" fragment (synthetic, not a
+        real CalDAV object locator) -- exporting those isn't supported. -->
+        <button
+          v-if="!event.href.includes('#')"
+          type="button"
+          class="btn btn-ghost"
+          title="Export as .ics"
+          @click="onExport"
+        >
+          ⬇
+        </button>
+        <button v-if="!readOnly" type="button" class="btn btn-primary" @click="emit('edit')">Edit</button>
       </div>
-      <p v-else class="popover__badge">Read-only subscription</p>
     </div>
   </Teleport>
 </template>
@@ -184,7 +211,8 @@ const timezoneNote = computed(() => {
   padding-top: 0.6rem;
   border-top: 1px solid var(--color-border);
 }
-.popover__delete {
+.popover__delete,
+.popover__readonly {
   margin-right: auto;
 }
 @keyframes pop-in {

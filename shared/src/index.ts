@@ -8,6 +8,11 @@ export interface CreateCalendarInput {
   color?: string
 }
 
+export interface UpdateCalendarInput {
+  displayName?: string
+  color?: string
+}
+
 export interface Calendar {
   id: string
   displayName: string
@@ -37,9 +42,23 @@ export interface CalendarObject {
   recurrenceId: string | null // ISO 8601 if this is an override occurrence
   isRecurring: boolean
   rrule: string | null
+  // RFC 7986 COLOR -- per-event override of the owning calendar's color.
+  // null/absent means "use the calendar's color."
+  color: string | null
+  alarms: AlarmFields[]
+  rdate: string[]
 }
 
 export type EditScope = 'this' | 'thisAndFuture' | 'all'
+
+// v1 scope: a single relative-before-start DISPLAY alarm per entry. Does
+// not model TRIGGER relative to DTEND, ACTION other than DISPLAY, or
+// repeating alarms (VALARM's own REPEAT/DURATION) -- those are simply not
+// read back as AlarmFields (see mapper.ts), same "unsupported, falls back
+// silently" posture EventEditDialog.vue already takes for exotic RRULEs.
+export interface AlarmFields {
+  minutesBefore: number
+}
 
 export interface EventFields {
   summary: string
@@ -50,6 +69,12 @@ export interface EventFields {
   allDay: boolean
   timezone: string | null
   rrule: string | null
+  color: string | null
+  alarms: AlarmFields[]
+  // Explicit one-off occurrence dates on top of rrule (ISO 8601). Only
+  // meaningful alongside a non-null rrule; ignored/empty for non-recurring
+  // events.
+  rdate: string[]
 }
 
 export type CreateEventInput = EventFields
@@ -72,7 +97,10 @@ export interface DeleteEventInput {
 export interface SyncResult {
   syncToken: string
   changed: CalendarObject[]
-  deletedUids: string[]
+  // hrefs, not UIDs -- a sync-collection REPORT's deleted entries only
+  // ever carry the object's href, never its UID (the object is gone, so
+  // there's nothing left to parse a UID out of).
+  deletedHrefs: string[]
 }
 
 export interface SessionInfo {
@@ -101,6 +129,21 @@ export interface ShareCalendarInput {
   // whichever mechanism the server supports.
   recipient: string
   permission: SharePermission
+}
+
+// An existing share the current user, as owner, has created for a
+// calendar -- distinct from PendingShare, which is the recipient-side view
+// of an unaccepted Radicale share.
+export interface OwnedShare {
+  recipient: string
+  permission: SharePermission
+  // Radicale: recipient has enabled+unhidden their own side. Baikal: always
+  // true (its shares auto-accept, no separate acceptance step).
+  accepted: boolean
+  mechanism: 'radicale-map' | 'baikal-caldav-sharing'
+  // Opaque; echoed back verbatim to update/revoke this specific share.
+  // Never parsed by the client.
+  token: string
 }
 
 export interface ShareCalendarResult {

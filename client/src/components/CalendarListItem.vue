@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import type { Calendar } from '@yourcal/shared'
-import { ApiRequestError } from '../api.js'
+import { api, ApiRequestError } from '../api.js'
+import { triggerDownload } from '../lib/download.js'
 import { useCalendarsStore } from '../stores/calendars.js'
 
 defineProps<{ cal: Calendar }>()
-const emit = defineEmits<{ share: [id: string, name: string] }>()
+const emit = defineEmits<{ share: [id: string, name: string]; rename: [id: string, name: string, color: string] }>()
 
 const store = useCalendarsStore()
 
 function onColorInput(id: string, event: Event): void {
   const input = event.target as HTMLInputElement
   store.setColorOverride(id, input.value)
+}
+
+function onExportClick(cal: Calendar): void {
+  triggerDownload(api.calendarExportUrl(cal.id))
 }
 
 // Both actions can genuinely fail server-side (e.g. the DAV server
@@ -61,6 +66,23 @@ async function onUnsubscribeClick(cal: Calendar): Promise<void> {
       @click="store.resetColorOverride(cal.id)"
     >
       ×
+    </button>
+    <button
+      type="button"
+      class="calendar-list__export"
+      title="Export this calendar as .ics"
+      @click="onExportClick(cal)"
+    >
+      ⬇
+    </button>
+    <button
+      v-if="!cal.isShared"
+      type="button"
+      class="calendar-list__rename"
+      title="Rename this calendar"
+      @click="emit('rename', cal.id, cal.displayName, cal.color)"
+    >
+      ✎
     </button>
     <button
       v-if="!cal.isShared"
@@ -158,6 +180,8 @@ input[type='checkbox'] {
 .calendar-list__reset:hover {
   color: var(--color-danger);
 }
+.calendar-list__export,
+.calendar-list__rename,
 .calendar-list__share {
   flex-shrink: 0;
   padding: 0 0.2rem;
@@ -168,6 +192,8 @@ input[type='checkbox'] {
   line-height: 1;
   cursor: pointer;
 }
+.calendar-list__export:hover,
+.calendar-list__rename:hover,
 .calendar-list__share:hover {
   color: var(--color-text);
 }
