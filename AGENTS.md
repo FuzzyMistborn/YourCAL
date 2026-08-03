@@ -17,30 +17,33 @@ up anywhere in the codebase.
 
 ## TODO (user-requested, not yet scoped)
 
-- **Reminders/alarms (VALARM).** Identified via a feature comparison
-  against Nextcloud Calendar as the single biggest remaining functionality
-  gap — no notification of any kind exists in this app. Not yet scoped.
-- **Per-event color override** (vs. today's per-calendar-only override) —
-  also identified from that comparison, not yet built.
-- **VTODO/task list UI.** `Calendar.supportsTasks` is already discovered
-  and plumbed through the store layer (`DavCalendarStore.discoverCalendars`)
-  but there's no UI for it — cheapest big feature gap left, since the
-  backend plumbing already exists. Attendees/attachments remain explicitly
-  out of scope per the original project plan. Sharing was investigated
-  (see "Calendar sharing" below) and found to work at the protocol level
-  with zero app changes required, given server-side setup -- but nothing
-  has been built in the app UI for it yet (no way to browse/add a shared
-  calendar by URL, no in-app share-management).
+- **VTODO/task list UI.** Explicitly out of scope per the user — not to be
+  built. `Calendar.supportsTasks` is discovered and plumbed through the
+  store layer (`DavCalendarStore.discoverCalendars`) but has no UI, and
+  should stay that way. Attendees/attachments remain out of scope per the
+  original project plan too.
 - Search, ICS import, and WebCal/ICS subscriptions are done — see their own
   section below.
-- Recurring-event UI is done: interval, weekday picker (`BYDAY`, e.g.
-  Tue/Thu), and end condition (never/count/until) are all implemented in
-  `EventEditDialog.vue` and verified against real Radicale (see below). The
-  remaining gap is monthly/yearly BY-position patterns (e.g. "2nd Tuesday
-  of the month") — not requested yet.
-- Timezone support (write, embed, and read back real IANA VTIMEZONE data)
-  is now done — see "Timezone handling" below; this replaces what used to
-  be an open TODO here.
+- Recurring-event UI: interval, weekday picker (`BYDAY`, e.g. Tue/Thu), and
+  end condition (never/count/until) are implemented in `EventEditDialog.vue`
+  and verified against real Radicale (see below). Monthly/yearly BY-position
+  patterns (e.g. "2nd Tuesday of the month"), RDATE, and better override
+  preservation across "all"/"this-and-future" edits are still open — see
+  the approved plan at `/home/geoff/.claude/plans/dazzling-bouncing-frog.md`.
+- Timezone support (write, embed, and read back real IANA VTIMEZONE data) is
+  done — see "Timezone handling" below.
+- Reminders (VALARM, standard RFC 5545 `DISPLAY` alarms with a relative
+  before-start `TRIGGER`) round-trip through create/read/edit as of this
+  session — see "Event reminders (VALARM)" below. Delivery is in-tab only
+  (Notification API, no service worker/push) by explicit user choice.
+- Per-event color override (RFC 7986 `COLOR`, layered over the existing
+  per-calendar override) is done — see "Per-event color" below.
+- `PATCH /api/calendars/:id` (rename/recolor) is done — see "Calendar
+  rename/edit" below; this replaces what used to be an open TODO here.
+- Read-only calendar support (real `current-user-privilege-set` discovery,
+  server-enforced) is done — see "Read-only calendar support" below.
+- Export, conflict-handling UX, and share management (list/revoke/permission)
+  are planned but not yet built — see the plan file above.
 
 ## Where things stand
 
@@ -1057,3 +1060,131 @@ performance problem). Verified end-to-end against real Radicale:
   FullCalendar's own `revert()` mechanism. Fine-grained cache patching
   (avoiding a full reload after every dialog save) is a reasonable later
   optimization, not a correctness issue.
+
+## Feature batch: calendar rename, read-only, per-event color, reminders
+
+Four items from the approved plan at
+`/home/geoff/.claude/plans/dazzling-bouncing-frog.md`, all verified against
+real Radicale (curl-driven, same discipline as everything else in this
+file). Export, conflict UX, share management, and advanced recurrence from
+the same plan are not yet built.
+
+- **Calendar rename/edit.** `PATCH /api/calendars/:id` (`server/src/routes/calendars.ts`),
+  `DavCalendarStore.updateCalendar` does a raw PROPPATCH (tsdav has no
+  wrapper) setting `d:displayname`/`ca:calendar-color`, confirmed working
+  against real Radicale including a live rename+recolor+restore round trip.
+  Owner-only (403 if `calendar.isShared`), same ownership-check pattern as
+  delete/unsubscribe. `SqliteCalendarStore.updateCalendar` write-throughs
+  and patches the cached row.
+- **Read-only calendar support.** `server/src/dav/privileges.ts`'s
+  `isCalendarReadOnly()` does a raw `current-user-privilege-set` PROPFIND
+  per calendar (tsdav's `fetchCalendars()` doesn't request this property at
+  all) in `DavCalendarStore.discoverCalendars`. **Confirmed by spike-testing
+  against real Radicale, and this mattered**: the calendar *owner* gets a
+  bare `write` privilege, but a `rw`-permission share *recipient* only ever
+  gets `read` + `write-content` — never a plain `write` — and an
+  `r`-permission recipient gets only `read`. So `readOnly` has to check for
+  the absence of *both* `write` and `write-content`, not just `write`.
+  Enforced server-side too, not just discovered: `requireWritableCalendar()`
+  in `calendars.ts` gates all four event-write routes (create/import/update/delete),
+  403ing before any DAV call — verified live (a `rw`→`r` reshared calendar's
+  event-create request correctly 403'd). Client wiring: `Calendar.readOnly`
+  now drives `EventDetailPopover`'s existing readOnly UI (previously only
+  fed by the ICS-subscription case) and FullCalendar's per-event `editable`.
+- **Per-event color.** RFC 7986 `COLOR`, a plain string VEVENT property (no
+  `ICAL.Recur.fromString`-style wrapping trap the way RRULE has).
+  `EventFields.color`/`CalendarObject.color`, read/write in `mapper.ts`,
+  edit UI in `EventEditDialog.vue` (swatch defaults to the calendar's own
+  color when unset). Verified round-tripping through create+read against
+  real Radicale. Flows through `editScope.ts` for free (rebuild-from-fields
+  architecture), no changes needed there.
+- **Event reminders (VALARM).** `EventFields.alarms`/`CalendarObject.alarms`,
+  a `{ minutesBefore: number }[]` (v1 scope: `DISPLAY` action, relative
+  before-start `TRIGGER` only — an absolute-datetime trigger or an
+  after-start/positive-duration trigger is silently not read back, same
+  posture `EventEditDialog.vue` already takes for RRULEs it can't parse).
+  **Spike-tested before writing any server code** (learned from this file's
+  own RRULE `Recur.fromString` gotcha): unlike RRULE, a raw `-PT15M` string
+  passed straight to `updatePropertyWithValue('trigger', ...)` serializes
+  and re-parses correctly as an `ICAL.Duration` — no typed-value wrapper
+  needed. `mapper.ts`'s `buildVeventComponent`/`parseAlarms` do the
+  round-trip; `editScope.ts` needs no changes (same rebuild-from-fields
+  reasoning as per-event color). **Verified against real Radicale**: created
+  an event with two alarms (10 min, 1 day before), confirmed both round-trip
+  through the API and confirmed the raw ICS Radicale stored has real,
+  standard `BEGIN:VALARM`/`ACTION:DISPLAY`/`TRIGGER:-PT10M`/`TRIGGER:-P1D`
+  blocks — portable to any other CalDAV client, not app-only metadata.
+  Delivery is in-tab only (explicit user choice, no service worker/push):
+  `stores/notifications.ts` requests `Notification` permission only on an
+  explicit sidebar button click (never unprompted), and schedules
+  `setTimeout`s for alarms firing within the next 24h whenever the visible
+  event range changes, re-arming on every load since timers don't survive a
+  reload. No background delivery when the tab isn't open — surfaced in the
+  UI copy, not just left implicit.
+- **Share management** (list/change-permission/revoke shares an owner has
+  created) is done for Radicale, verified end-to-end against real Radicale:
+  created a share, listed it (`accepted: false` before the recipient
+  unhides their side, correctly), changed its permission `rw`→`r` and
+  confirmed via re-list, revoked it and confirmed it disappeared from the
+  list. `listSharesForCalendar`/`updateSharePermission`/`revokeShare`
+  (`server/src/dav/sharing.ts`) follow the same "positively confirm which
+  mechanism a share uses before doing anything" discipline as
+  `unsubscribeFromCalendar`'s Sixth-bug fix -- never infer Radicale-vs-Baikal
+  from a failure. **Baikal side (list/update/revoke) is implemented but
+  NOT spike-tested** in this session -- this environment has no PHP
+  installed (no `sudo` available to install it, see "How to run a local
+  Baikal for testing"), so `updateSharePermission`/`revokeShare`'s Baikal
+  branches (`cs:share` re-invite for permission change, `cs:remove` for
+  revoke) are written against the calendarserver-sharing draft's documented
+  shape but unverified against a real server, unlike everything else
+  sharing-related in this file. Surfaces a clear `ShareFailedError` on
+  failure rather than silently no-opping, but should be spike-tested
+  against real Baikal before being trusted in production. New routes:
+  `GET/PATCH/DELETE /api/sharing/calendars/:id/shares[/:token]`
+  (`server/src/routes/sharing.ts`), owner-only (403 if `isShared`, same
+  pattern as PATCH-calendar/delete). `OwnedShare.token` is a base64url
+  encoding of the underlying `PathOrToken` (Radicale) or `mailto:` href
+  (Baikal), reusing `idCodec.ts`'s `encodeId`/`decodeId` to avoid a raw
+  slash-containing value in a route param. Client: `ShareCalendarDialog.vue`
+  gained a "Currently shared with" panel above the invite form, one row per
+  share with a permission `<select>` and a revoke button.
+- **Advanced recurrence** is done, all three sub-parts verified against
+  real Radicale:
+  - **Ordinal `BYDAY` ("2nd Tuesday", "last Friday")** -- confirmed the
+    server needed zero changes (`recurrence.ts`'s expansion is 100%
+    delegated to ical.js's own iterator, and `mapper.ts` just round-trips
+    whatever RRULE string the client sends); this was purely
+    `EventEditDialog.vue`'s repeat picker gaining a monthly "day N" vs "the
+    [ordinal] [weekday]" sub-choice. Verified live: `FREQ=MONTHLY;BYDAY=2TU`
+    created via the real API expanded to the correct 2nd-Tuesday dates
+    across 6 months (Aug 11, Sep 8, Oct 13, Nov 10...).
+  - **RDATE** -- confirmed ical.js's iterator honors RDATE with zero extra
+    wiring (spike-tested before touching any code). `EventFields.rdate`/
+    `CalendarObject.rdate` added; `mapper.ts` writes via
+    `addPropertyWithValue` with a real `ICAL.Time` (never a raw string,
+    learned from the RRULE `Recur.fromString` trap) and reads back via
+    `getAllProperties('rdate')`. Verified live: a `FREQ=MONTHLY;BYDAY=2TU`
+    series with an `RDATE` of Dec 25 (a date the pattern wouldn't produce
+    on its own) correctly included Dec 25 alongside the regular monthly
+    occurrences.
+  - **Override preservation** in `applyAll`/`applyThisAndFuture`
+    (`editScope.ts`) -- previously *all* per-occurrence overrides were
+    unconditionally dropped on either edit. Now: `applyAll` snapshots
+    overrides before rebuilding the master, then shifts each override's
+    `RECURRENCE-ID`/`DTSTART`/`DTEND` by however much the master's own
+    `DTSTART` moved (via the new `shiftOverride()` helper,
+    `ICAL.Time.subtractDate`/`.addDuration`), leaving every other field
+    (summary/description/color/alarms/etc) completely untouched.
+    `applyThisAndFuture` does the same for overrides at/after the split
+    point, additionally re-keying them onto the new series's UID (ical.js
+    associates an override to its master purely by shared UID). Both fall
+    back to the old drop-everything behavior only when the edit also
+    toggles all-day-ness (no sensible time delta exists across a
+    DATE↔DATE-TIME boundary). **Verified live** with the exact scenario
+    this file previously documented as broken: a weekly series with one
+    occurrence manually moved +2h and given a custom title+color, then the
+    whole series edited "all" to shift by +1h and rename -- the overridden
+    occurrence correctly ended up at +3h from the original series time
+    (preserving its own +2h offset on top of the series's +1h shift) with
+    its custom title and color both intact, while every other occurrence
+    picked up the new title and +1h time.

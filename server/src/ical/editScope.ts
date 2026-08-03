@@ -68,20 +68,65 @@ export function applyThisOccurrence(ics: string, recurrenceId: string, fields: E
 }
 
 /**
+ * Shifts an override VEVENT's RECURRENCE-ID/DTSTART/DTEND by `delta` in
+ * place -- used to carry an override forward when the master's own DTSTART
+ * moves (applyAll) or a series is split (applyThisAndFuture). Preserves the
+ * override's own field values (summary/description/color/alarms/etc)
+ * completely untouched, and preserves its *relative* time offset from the
+ * master (e.g. "this occurrence starts 2h later than the rest of the
+ * series") by shifting both the recurrence-id (which slot it fills) and its
+ * own dtstart/dtend (its actual time) by the same amount the master moved.
+ */
+function shiftOverride(override: ICAL.Component, delta: ICAL.Duration): void {
+  const rid = getRecurrenceId(override)
+  if (rid) {
+    const shifted = rid.clone()
+    shifted.addDuration(delta)
+    override.updatePropertyWithValue('recurrence-id', shifted)
+  }
+  for (const prop of ['dtstart', 'dtend'] as const) {
+    const value = override.getFirstPropertyValue(prop) as ICAL.Time | null
+    if (!value) continue
+    const shifted = value.clone()
+    shifted.addDuration(delta)
+    override.updatePropertyWithValue(prop, shifted)
+  }
+}
+
+/**
  * all-events edit: rewrite the master with the new fields.
  *
- * Simplification (see AGENTS.md): existing per-occurrence overrides are
- * dropped, since they may no longer make sense against the new fields.
+ * Existing per-occurrence overrides are preserved (not dropped) when
+ * possible: their own fields are left completely untouched, and their
+ * recurrence-id/time are shifted by however much the master's own DTSTART
+ * moved, so "this one occurrence was moved +2h" survives an edit that
+ * changes the series's own time. Best-effort: if the edit toggles
+ * all-day-ness (DTSTART's value type changes between DATE and DATE-TIME),
+ * there's no sensible delta to compute, so overrides are dropped in that
+ * one case only, same as the old blanket behavior.
  */
 export function applyAll(ics: string, fields: EventFields): string {
   const comp = parseCalendar(ics)
   const master = getMaster(comp)
   const uid = master.getFirstPropertyValue('uid') as string
+  const oldMasterDtstart = master.getFirstPropertyValue('dtstart') as ICAL.Time
+  const overrides = comp.getAllSubcomponents('vevent').filter((v) => v !== master)
 
   for (const v of comp.getAllSubcomponents('vevent')) {
     comp.removeSubcomponent(v)
   }
-  comp.addSubcomponent(buildVeventComponent(uid, fields))
+  const newMaster = buildVeventComponent(uid, fields)
+  comp.addSubcomponent(newMaster)
+
+  const newMasterDtstart = newMaster.getFirstPropertyValue('dtstart') as ICAL.Time
+  if (oldMasterDtstart.isDate === newMasterDtstart.isDate) {
+    const delta = newMasterDtstart.subtractDate(oldMasterDtstart)
+    for (const override of overrides) {
+      shiftOverride(override, delta)
+      comp.addSubcomponent(override)
+    }
+  }
+
   ICAL.helpers.updateTimezones(comp)
   return comp.toString()
 }
@@ -91,11 +136,20 @@ export function applyAll(ics: string, fields: EventFields): string {
  * before `recurrenceId`, and returns a fresh ICS for a brand new series
  * (new UID) starting at recurrenceId with the edited fields.
  *
- * Simplification (see AGENTS.md): overrides at/after the split point are
- * dropped from the old series and not migrated to the new one. Also, a
- * COUNT-based RRULE is carried into the new series unchanged, so it
- * restarts the count from the split point rather than continuing the
- * original series's remaining occurrences.
+ * Overrides at/after the split point are migrated onto the new series
+ * (not dropped): each is re-keyed onto `newUid` (ical.js associates an
+ * override to its master purely by shared UID) and its recurrence-id/time
+ * shifted by however much the split's own instant differs from the new
+ * series's actual start -- e.g. splitting off a series and changing its
+ * time from 10am to 2pm shifts every migrated override by the same +4h, so
+ * a occurrence that was "+30min late" relative to the old series stays
+ * +30min late relative to the new one. Best-effort: if the split also
+ * toggles all-day-ness, there's no sensible delta, so those overrides are
+ * dropped instead (same fallback as applyAll).
+ *
+ * Remaining simplification (see AGENTS.md): a COUNT-based RRULE is carried
+ * into the new series unchanged, so it restarts the count from the split
+ * point rather than continuing the original series's remaining occurrences.
  */
 export function applyThisAndFuture(
   ics: string,
@@ -112,10 +166,14 @@ export function applyThisAndFuture(
   const originalRrule = master.getFirstPropertyValue('rrule') as ICAL.Recur | null
   const carriedRrule = originalRrule ? originalRrule.clone() : null
 
+  const migratedOverrides: ICAL.Component[] = []
   for (const v of comp.getAllSubcomponents('vevent')) {
     if (v === master) continue
     const rid = getRecurrenceId(v)
-    if (rid && rid.compare(boundary) >= 0) comp.removeSubcomponent(v)
+    if (rid && rid.compare(boundary) >= 0) {
+      comp.removeSubcomponent(v)
+      migratedOverrides.push(v)
+    }
   }
   truncateRrule(master, boundary)
 
@@ -128,7 +186,19 @@ export function applyThisAndFuture(
   const newComp = new ICAL.Component(['vcalendar', [], []])
   newComp.updatePropertyWithValue('prodid', '-//calendar//standalone//EN')
   newComp.updatePropertyWithValue('version', '2.0')
-  newComp.addSubcomponent(buildVeventComponent(newUid, newFields))
+  const newMaster = buildVeventComponent(newUid, newFields)
+  newComp.addSubcomponent(newMaster)
+
+  const newMasterDtstart = newMaster.getFirstPropertyValue('dtstart') as ICAL.Time
+  if (boundary.isDate === newMasterDtstart.isDate) {
+    const delta = newMasterDtstart.subtractDate(boundary)
+    for (const override of migratedOverrides) {
+      override.updatePropertyWithValue('uid', newUid)
+      shiftOverride(override, delta)
+      newComp.addSubcomponent(override)
+    }
+  }
+
   ICAL.helpers.updateTimezones(comp)
   ICAL.helpers.updateTimezones(newComp)
 

@@ -1,5 +1,10 @@
 import ICAL from 'ical.js'
 
+// Caps the number of events a single import can create -- each accepted
+// group becomes its own createObject() call against the DAV server, so an
+// unbounded file could turn one request into thousands of upstream writes.
+export const MAX_IMPORT_EVENTS = 1000
+
 /**
  * Splits an uploaded .ics file (which may contain many events, e.g. an
  * export from another calendar) into one importable VCALENDAR string per
@@ -24,7 +29,7 @@ export function splitImportIcs(icsText: string): string[] {
   }
 
   const results: string[] = []
-  for (const components of groups.values()) {
+  for (const components of Array.from(groups.values()).slice(0, MAX_IMPORT_EVENTS)) {
     const newUid = crypto.randomUUID()
     const newCal = new ICAL.Component(['vcalendar', [], []])
     newCal.updatePropertyWithValue('prodid', '-//calendar//standalone//EN')

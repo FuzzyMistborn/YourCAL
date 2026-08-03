@@ -6,11 +6,14 @@ import type {
   CreateEventInput,
   DeleteEventInput,
   LoginRequest,
+  OwnedShare,
   PendingShare,
   SessionInfo,
   ShareCalendarInput,
   ShareCalendarResult,
+  SharePermission,
   UnsubscribeResult,
+  UpdateCalendarInput,
   UpdateEventInput,
 } from '@yourcal/shared'
 
@@ -54,12 +57,22 @@ export const api = {
   listCalendars: () => request<Calendar[]>('/calendars'),
   createCalendar: (body: CreateCalendarInput) =>
     request<Calendar>('/calendars', { method: 'POST', body: JSON.stringify(body) }),
+  updateCalendar: (calendarId: string, body: UpdateCalendarInput) =>
+    request<Calendar>(`/calendars/${calendarId}`, { method: 'PATCH', body: JSON.stringify(body) }),
   shareCalendar: (calendarId: string, body: ShareCalendarInput) =>
     request<ShareCalendarResult>(`/calendars/${calendarId}/share`, { method: 'POST', body: JSON.stringify(body) }),
   deleteCalendar: (calendarId: string) => request<void>(`/calendars/${calendarId}`, { method: 'DELETE' }),
   unsubscribeCalendar: (calendarId: string) =>
     request<UnsubscribeResult>(`/calendars/${calendarId}/unsubscribe`, { method: 'POST' }),
   listPendingShares: () => request<PendingShare[]>('/sharing/pending'),
+  listShares: (calendarId: string) => request<OwnedShare[]>(`/sharing/calendars/${calendarId}/shares`),
+  updateSharePermission: (calendarId: string, token: string, permission: SharePermission) =>
+    request<void>(`/sharing/calendars/${calendarId}/shares/${encodeURIComponent(token)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ permission }),
+    }),
+  revokeShare: (calendarId: string, token: string) =>
+    request<void>(`/sharing/calendars/${calendarId}/shares/${encodeURIComponent(token)}`, { method: 'DELETE' }),
   acceptPendingShare: (pathOrToken: string) =>
     request<void>('/sharing/pending/accept', { method: 'POST', body: JSON.stringify({ pathOrToken }) }),
   listEvents: (calendarId: string, start: string, end: string) =>
@@ -84,6 +97,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ics }),
     }),
+  // Export endpoints are plain browser-navigated downloads (Content-Disposition:
+  // attachment), not fetch() calls -- the session cookie already goes along
+  // for a same-origin navigation, and this sidesteps request()'s built-in
+  // assumption that every response is JSON.
+  eventExportUrl: (calendarId: string, uid: string, href: string) =>
+    `/api/calendars/${calendarId}/events/${encodeURIComponent(uid)}/export?href=${encodeURIComponent(href)}`,
+  calendarExportUrl: (calendarId: string, start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    const qs = params.toString()
+    return `/api/calendars/${calendarId}/export${qs ? `?${qs}` : ''}`
+  },
   getSubscriptionEvents: (url: string, start: string, end: string) =>
     request<CalendarObject[]>(
       `/subscriptions/events?url=${encodeURIComponent(url)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,

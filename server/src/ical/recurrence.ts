@@ -32,7 +32,18 @@ export function expandCalendarObject(
 
   const masterEvent = new ICAL.Event(master, { strictExceptions: false })
 
+  const rangeStart = ICAL.Time.fromJSDate(new Date(range.start), true)
+  const rangeEnd = ICAL.Time.fromJSDate(new Date(range.end), true)
+
   if (!masterEvent.isRecurring()) {
+    // Non-recurring objects still need range filtering: the SQLite cache
+    // (SqliteCalendarStore.getEvents) calls this for every cached object
+    // regardless of the requested range, relying on this function to do
+    // the filtering -- without this check, every cached non-recurring
+    // event would show up on every date range navigated to.
+    if (masterEvent.endDate.compare(rangeStart) < 0 || masterEvent.startDate.compare(rangeEnd) > 0) {
+      return []
+    }
     return [
       buildCalendarObject(masterEvent, {
         calendarId,
@@ -49,9 +60,6 @@ export function expandCalendarObject(
     if (override === master) continue
     masterEvent.relateException(override)
   }
-
-  const rangeStart = ICAL.Time.fromJSDate(new Date(range.start), true)
-  const rangeEnd = ICAL.Time.fromJSDate(new Date(range.end), true)
 
   const results: CalendarObject[] = []
   const iterator = masterEvent.iterator()

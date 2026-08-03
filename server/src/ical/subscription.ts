@@ -1,7 +1,14 @@
 import type { CalendarObject, TimeRange } from '@yourcal/shared'
 import { createHash } from 'node:crypto'
 import ICAL from 'ical.js'
+import { safeFetchExternal } from '../dav/ssrf.js'
 import { expandCalendarObject } from './recurrence.js'
+
+// Bounds how much work a single feed can force onto the server -- an
+// unbounded or malicious feed could otherwise contain enough VEVENTs to
+// make expansion (recurrence.ts's own MAX_ITERATIONS is per-event, not
+// per-feed) expensive across the whole request.
+const MAX_SUBSCRIPTION_EVENTS = 2000
 
 function normalizeUrl(url: string): string {
   return url.startsWith('webcal://') ? `https://${url.slice('webcal://'.length)}` : url
@@ -19,15 +26,11 @@ export function subscriptionCalendarId(url: string): string {
  */
 export async function fetchSubscriptionEvents(url: string, range: TimeRange): Promise<CalendarObject[]> {
   const normalized = normalizeUrl(url)
-  const response = await fetch(normalized, { headers: { Accept: 'text/calendar' } })
-  if (!response.ok) {
-    throw new Error(`Failed to fetch subscription feed: ${response.status} ${response.statusText}`)
-  }
-  const text = await response.text()
+  const { text } = await safeFetchExternal(normalized, { headers: { Accept: 'text/calendar' } })
   const calendarId = subscriptionCalendarId(url)
 
   const comp = new ICAL.Component(ICAL.parse(text))
-  const vevents = comp.getAllSubcomponents('vevent')
+  const vevents = comp.getAllSubcomponents('vevent').slice(0, MAX_SUBSCRIPTION_EVENTS)
 
   const groups = new Map<string, ICAL.Component[]>()
   for (const vevent of vevents) {

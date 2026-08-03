@@ -41,6 +41,17 @@ export const useEventsStore = defineStore('events', () => {
     return calendarIds.flatMap((id) => byRange.value[rangeKey(id, start, end)] ?? [])
   }
 
+  // Used by conflict-resolution UI to look up the server's current version
+  // of an event after a 412, so the user can see what changed and reapply
+  // their edit against the fresh etag rather than just losing it.
+  function findEvent(calendarId: string, uid: string, recurrenceId: string | null): CalendarObject | undefined {
+    for (const events of Object.values(byRange.value)) {
+      const found = events.find((e) => e.calendarId === calendarId && e.uid === uid && e.recurrenceId === recurrenceId)
+      if (found) return found
+    }
+    return undefined
+  }
+
   async function createEvent(calendarId: string, fields: CreateEventInput): Promise<void> {
     await api.createEvent(calendarId, fields)
     await reloadLastRange()
@@ -56,5 +67,5 @@ export const useEventsStore = defineStore('events', () => {
     await reloadLastRange()
   }
 
-  return { byRange, loading, loadRange, reloadLastRange, eventsFor, createEvent, updateEvent, deleteEvent }
+  return { byRange, loading, loadRange, reloadLastRange, eventsFor, findEvent, createEvent, updateEvent, deleteEvent }
 })

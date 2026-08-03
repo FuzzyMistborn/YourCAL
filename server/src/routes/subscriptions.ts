@@ -4,13 +4,10 @@ import { requireSession } from './requireSession.js'
 
 export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { url?: string; start?: string; end?: string } }>('/events', async (req, reply) => {
-    // Authenticated-only (like every other route here), but worth noting:
-    // this fetches an arbitrary user-supplied URL server-side, which is a
-    // limited SSRF surface for whoever is already logged into this
-    // instance. Same trust level as the CalDAV login itself (also a
-    // user-supplied URL fetched server-side) -- acceptable for a personal
-    // self-hosted app, not something to expose more broadly without
-    // reconsidering.
+    // Fetches an arbitrary user-supplied URL server-side; safeFetchExternal
+    // (server/src/dav/ssrf.ts) blocks private/loopback/link-local
+    // addresses (incl. cloud metadata endpoints), re-validates every
+    // redirect hop, and caps the response size.
     const dav = requireSession(req, reply)
     if (!dav) return
 

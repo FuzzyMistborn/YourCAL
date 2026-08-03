@@ -3,12 +3,16 @@ import type {
   CreateEventInput,
   DeleteEventInput,
   ShareCalendarInput,
+  UpdateCalendarInput,
   UpdateEventInput,
 } from '@yourcal/shared'
-import type { FastifyInstance } from 'fastify'
+import type { Calendar } from '@yourcal/shared'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { assertHrefSameHost } from '../dav/hostAllowlist.js'
 import { shareCalendar, ShareFailedError } from '../dav/sharing.js'
+import type { DavContext } from '../dav/context.js'
 import * as editScope from '../ical/editScope.js'
+import { mergeIcsObjects } from '../ical/exportIcs.js'
 import { splitImportIcs } from '../ical/importIcs.js'
 import { calendarObjectToIcs } from '../ical/mapper.js'
 import { eventFieldsError } from '../ical/validate.js'
@@ -16,6 +20,43 @@ import { decodeId } from '../store/idCodec.js'
 import { EtagConflictError } from '../store/errors.js'
 import { store } from '../store/index.js'
 import { requireSession } from './requireSession.js'
+
+/**
+ * Server-side gate for write routes: looks up the calendar via
+ * discoverCalendars (which now does real current-user-privilege-set
+ * discovery) and 403s if it's read-only. Hiding the edit UI client-side
+ * isn't sufficient on its own -- same principle as the ownership checks
+ * added for delete/unsubscribe/PATCH. Returns null (having already sent a
+ * reply) when the write should be rejected.
+ */
+async function requireWritableCalendar(
+  dav: DavContext,
+  calendarId: string,
+  reply: FastifyReply,
+): Promise<Calendar | null> {
+  const calendars = await store.discoverCalendars(dav)
+  const calendar = calendars.find((c) => c.id === calendarId)
+  if (!calendar) {
+    reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+    return null
+  }
+  if (calendar.readOnly) {
+    reply.code(403).send({ error: 'forbidden', message: 'This calendar is read-only' })
+    return null
+  }
+  return calendar
+}
+
+// Wide-enough default range for a "whole calendar" export when no
+// start/end is given -- broad but bounded, rather than an unbounded query
+// some CalDAV servers may not handle well.
+const EXPORT_DEFAULT_START = '1970-01-01T00:00:00.000Z'
+const EXPORT_DEFAULT_END = '2100-01-01T00:00:00.000Z'
+
+/** Strips characters that would break out of a Content-Disposition filename. */
+function sanitizeFilename(name: string): string {
+  return name.replace(/[\r\n"]/g, '').slice(0, 100) || 'export'
+}
 
 export async function calendarRoutes(app: FastifyInstance): Promise<void> {
   app.get('/', async (req, reply) => {
@@ -62,9 +103,57 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
+  app.patch<{ Params: { id: string }; Body: UpdateCalendarInput }>('/:id', async (req, reply) => {
+    const dav = requireSession(req, reply)
+    if (!dav) return
+
+    if (req.body?.displayName !== undefined && !req.body.displayName.trim()) {
+      return reply.code(400).send({ error: 'bad_request', message: 'displayName cannot be empty' })
+    }
+
+    const calendars = await store.discoverCalendars(dav)
+    const calendar = calendars.find((c) => c.id === req.params.id)
+    if (!calendar) {
+      return reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+    }
+    if (calendar.isShared) {
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'Only the owner can rename or recolor this calendar' })
+    }
+
+    try {
+      const updated = await store.updateCalendar(dav, req.params.id, req.body ?? {})
+      return reply.send(updated)
+    } catch (err) {
+      if (err instanceof ShareFailedError) {
+        return reply.code(422).send({ error: 'update_failed', message: err.message })
+      }
+      throw err
+    }
+  })
+
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const dav = requireSession(req, reply)
     if (!dav) return
+
+    // Server-side ownership check: DELETE issues a raw DAV DELETE against
+    // the underlying collection, which for a Radicale-mounted share
+    // deletes the *owner's* real calendar, not just this user's view of
+    // it. Without this, any authenticated user could delete a calendar
+    // shared to them (or, via unsubscribe below, one they don't even have
+    // a share record for) -- the UI only hides the button, it doesn't
+    // stop the request.
+    const calendars = await store.discoverCalendars(dav)
+    const calendar = calendars.find((c) => c.id === req.params.id)
+    if (!calendar) {
+      return reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+    }
+    if (calendar.isShared) {
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'Only the owner can delete this calendar; use unsubscribe instead' })
+    }
 
     try {
       await store.deleteCalendar(dav, req.params.id)
@@ -80,6 +169,22 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/:id/unsubscribe', async (req, reply) => {
     const dav = requireSession(req, reply)
     if (!dav) return
+
+    // Mirror image of the delete check above: unsubscribeCalendar()'s
+    // fallback path issues a plain DAV DELETE for any calendar it can't
+    // positively confirm is a Radicale share, so calling this on a
+    // normal owned calendar would delete it outright. Require the
+    // calendar to actually be shared-to-this-user first.
+    const calendars = await store.discoverCalendars(dav)
+    const calendar = calendars.find((c) => c.id === req.params.id)
+    if (!calendar) {
+      return reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+    }
+    if (!calendar.isShared) {
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'Only calendars shared with you can be unsubscribed from' })
+    }
 
     try {
       const result = await store.unsubscribeCalendar(dav, req.params.id)
@@ -108,9 +213,38 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
+  app.get<{ Params: { id: string }; Querystring: { start?: string; end?: string } }>(
+    '/:id/export',
+    async (req, reply) => {
+      const dav = requireSession(req, reply)
+      if (!dav) return
+
+      const start = req.query.start ?? EXPORT_DEFAULT_START
+      const end = req.query.end ?? EXPORT_DEFAULT_END
+
+      // getEvents returns one expanded CalendarObject per *occurrence* --
+      // dedupe by href (all occurrences of a recurring series share the
+      // master object's href) before fetching raw ICS, so a recurring
+      // series isn't fetched/merged once per occurrence.
+      const events = await store.getEvents(dav, req.params.id, { start, end })
+      const hrefs = [...new Set(events.map((e) => e.href))]
+      const raw = await store.getRawObjects(dav, hrefs)
+      const ics = mergeIcsObjects(raw.map((r) => r.ics))
+
+      const calendars = await store.discoverCalendars(dav)
+      const name = calendars.find((c) => c.id === req.params.id)?.displayName ?? 'calendar'
+
+      reply
+        .header('Content-Type', 'text/calendar; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename="${sanitizeFilename(name)}.ics"`)
+        .send(ics)
+    },
+  )
+
   app.post<{ Params: { id: string }; Body: CreateEventInput }>('/:id/events', async (req, reply) => {
     const dav = requireSession(req, reply)
     if (!dav) return
+    if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
 
     const fieldsError = eventFieldsError(req.body)
     if (fieldsError) {
@@ -126,6 +260,7 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string }; Body: { ics: string } }>('/:id/import', async (req, reply) => {
     const dav = requireSession(req, reply)
     if (!dav) return
+    if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
 
     if (!req.body?.ics) {
       return reply.code(400).send({ error: 'bad_request', message: 'ics is required' })
@@ -158,6 +293,7 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const dav = requireSession(req, reply)
       if (!dav) return
+      if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
 
       if (!req.body || typeof req.body.href !== 'string' || typeof req.body.etag !== 'string') {
         return reply.code(400).send({ error: 'bad_request', message: 'href and etag are required' })
@@ -207,11 +343,30 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
+  app.get<{ Params: { id: string; uid: string }; Querystring: { href?: string } }>(
+    '/:id/events/:uid/export',
+    async (req, reply) => {
+      const dav = requireSession(req, reply)
+      if (!dav) return
+
+      if (!req.query.href) {
+        return reply.code(400).send({ error: 'bad_request', message: 'href query param is required' })
+      }
+
+      const raw = await store.getRawObject(dav, req.query.href)
+      reply
+        .header('Content-Type', 'text/calendar; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename="${sanitizeFilename(req.params.uid)}.ics"`)
+        .send(raw.ics)
+    },
+  )
+
   app.delete<{ Params: { id: string; uid: string }; Body: DeleteEventInput }>(
     '/:id/events/:uid',
     async (req, reply) => {
       const dav = requireSession(req, reply)
       if (!dav) return
+      if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
 
       if (!req.body || typeof req.body.href !== 'string' || typeof req.body.etag !== 'string') {
         return reply.code(400).send({ error: 'bad_request', message: 'href and etag are required' })

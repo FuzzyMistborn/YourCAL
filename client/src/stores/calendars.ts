@@ -1,4 +1,4 @@
-import type { Calendar } from '@yourcal/shared'
+import type { Calendar, UpdateCalendarInput } from '@yourcal/shared'
 import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
 import { api } from '../api.js'
@@ -73,6 +73,12 @@ export const useCalendarsStore = defineStore('calendars', () => {
     return created
   }
 
+  async function renameCalendar(id: string, input: UpdateCalendarInput): Promise<void> {
+    const updated = await api.updateCalendar(id, input)
+    const idx = calendars.value.findIndex((c) => c.id === id)
+    if (idx >= 0) calendars.value[idx] = updated
+  }
+
   function forget(id: string): void {
     calendars.value = calendars.value.filter((c) => c.id !== id)
     delete enabled[id]
@@ -125,6 +131,7 @@ export const useCalendarsStore = defineStore('calendars', () => {
     load,
     toggle,
     create,
+    renameCalendar,
     deleteCalendar,
     unsubscribeCalendar,
     dismissPending,

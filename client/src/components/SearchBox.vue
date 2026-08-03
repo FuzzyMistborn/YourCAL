@@ -11,6 +11,9 @@ const results = ref<CalendarObject[]>([])
 const open = ref(false)
 const loading = ref(false)
 let debounceHandle: ReturnType<typeof setTimeout> | null = null
+// Guards against an older, slower request's response landing after a
+// newer one's and clobbering fresher results.
+let requestSeq = 0
 
 function formatWhen(event: CalendarObject): string {
   const dt = DateTime.fromISO(event.start)
@@ -25,13 +28,17 @@ async function runSearch(): Promise<void> {
     return
   }
   loading.value = true
+  const seq = ++requestSeq
   try {
-    results.value = await api.search(q)
+    const response = await api.search(q)
+    if (seq !== requestSeq) return // a newer search superseded this one
+    results.value = response
     open.value = true
   } catch {
+    if (seq !== requestSeq) return
     results.value = []
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 

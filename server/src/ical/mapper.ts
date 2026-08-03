@@ -1,6 +1,34 @@
-import type { CalendarObject, EventFields } from '@yourcal/shared'
+import type { AlarmFields, CalendarObject, EventFields } from '@yourcal/shared'
 import ICAL from 'ical.js'
 import { ensureTimezoneRegistered, registerEmbeddedTimezones } from './timezones.js'
+
+/**
+ * Reads VALARM subcomponents back into AlarmFields. Only DISPLAY alarms
+ * with a relative, before-start TRIGGER (a negative ICAL.Duration) are
+ * recognized -- an absolute-datetime TRIGGER (getFirstPropertyValue
+ * returns an ICAL.Time instead of a Duration in that case, confirmed by
+ * spike-testing) or a positive (after-start) duration falls outside v1's
+ * scope and is silently dropped, same "unsupported, not modeled" posture
+ * EventEditDialog.vue already takes for exotic RRULEs it can't parse.
+ */
+function parseAlarms(vevent: ICAL.Component): AlarmFields[] {
+  const alarms: AlarmFields[] = []
+  for (const valarm of vevent.getAllSubcomponents('valarm')) {
+    if (valarm.getFirstPropertyValue('action') !== 'DISPLAY') continue
+    const trigger = valarm.getFirstPropertyValue('trigger') as ICAL.Duration | null
+    if (!trigger || typeof trigger !== 'object' || !('isNegative' in trigger) || !trigger.isNegative) continue
+    const minutesBefore = trigger.weeks * 7 * 24 * 60 + trigger.days * 24 * 60 + trigger.hours * 60 + trigger.minutes
+    alarms.push({ minutesBefore })
+  }
+  return alarms
+}
+
+function parseRdates(vevent: ICAL.Component): string[] {
+  return vevent
+    .getAllProperties('rdate')
+    .map((p) => (p.getFirstValue() as ICAL.Time | null)?.toJSDate().toISOString())
+    .filter((v): v is string => Boolean(v))
+}
 
 export function buildCalendarObject(
   event: ICAL.Event,
@@ -30,6 +58,9 @@ export function buildCalendarObject(
     recurrenceId: opts.recurrenceId,
     isRecurring: event.isRecurring(),
     rrule: rruleProp ? rruleProp.toString() : null,
+    color: (event.component.getFirstPropertyValue('color') as string | null) ?? null,
+    alarms: parseAlarms(event.component),
+    rdate: parseRdates(event.component),
   }
 }
 
@@ -93,6 +124,39 @@ export function buildVeventComponent(uid: string, fields: EventFields): ICAL.Com
   vevent.updatePropertyWithValue('dtstamp', ICAL.Time.now())
   if (fields.rrule) {
     vevent.updatePropertyWithValue('rrule', ICAL.Recur.fromString(fields.rrule))
+  }
+  if (fields.color) {
+    // RFC 7986 COLOR -- a plain text value, unlike rrule, so no typed-value
+    // wrapper is needed before updatePropertyWithValue.
+    vevent.updatePropertyWithValue('color', fields.color)
+  }
+
+  for (const iso of fields.rdate) {
+    // Same value-type handling as dtstart/dtend above: a real DATE-typed
+    // value for all-day events (no JS-Date/timezone round trip), a proper
+    // zone-converted DATE-TIME otherwise -- addPropertyWithValue with an
+    // ICAL.Time, never a raw string (RDATE has no RRULE-style
+    // Recur.fromString requirement, but there's no reason to risk it).
+    let rdateTime = fields.allDay
+      ? ICAL.Time.fromDateString(iso.slice(0, 10))
+      : ICAL.Time.fromJSDate(new Date(iso), true)
+    if (!fields.allDay && fields.timezone) {
+      const zone = ICAL.TimezoneService.get(fields.timezone)
+      if (zone) rdateTime = rdateTime.convertToZone(zone)
+    }
+    vevent.addPropertyWithValue('rdate', rdateTime)
+  }
+
+  for (const alarm of fields.alarms) {
+    const valarm = new ICAL.Component('valarm')
+    valarm.updatePropertyWithValue('action', 'DISPLAY')
+    // A raw duration string round-trips cleanly here (spike-tested) --
+    // unlike RRULE's `Recur.fromString` requirement, TRIGGER's DURATION
+    // value type serializes a plain string as-is.
+    valarm.updatePropertyWithValue('trigger', `-PT${alarm.minutesBefore}M`)
+    // RFC 5545 requires DESCRIPTION on a DISPLAY alarm.
+    valarm.updatePropertyWithValue('description', fields.summary || 'Reminder')
+    vevent.addSubcomponent(valarm)
   }
 
   return vevent

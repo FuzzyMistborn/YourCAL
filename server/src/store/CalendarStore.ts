@@ -5,6 +5,7 @@ import type {
   SyncResult,
   TimeRange,
   UnsubscribeResult,
+  UpdateCalendarInput,
 } from '@yourcal/shared'
 import type { DavContext } from '../dav/context.js'
 
@@ -27,6 +28,8 @@ export interface RawObjectWithHref extends RawObject {
 export interface CalendarStore {
   discoverCalendars(ctx: DavContext): Promise<Calendar[]>
   createCalendar(ctx: DavContext, input: CreateCalendarInput): Promise<Calendar>
+  /** Owner-only: renames/recolors a calendar via PROPPATCH. */
+  updateCalendar(ctx: DavContext, calendarId: string, input: UpdateCalendarInput): Promise<Calendar>
   getEvents(ctx: DavContext, calendarId: string, range: TimeRange): Promise<CalendarObject[]>
   getRawObject(ctx: DavContext, href: string): Promise<RawObject>
   /**

@@ -5,6 +5,7 @@ import type {
   SyncResult,
   TimeRange,
   UnsubscribeResult,
+  UpdateCalendarInput,
 } from '@yourcal/shared'
 import type Database from 'better-sqlite3'
 import type { DavContext } from '../dav/context.js'
@@ -133,6 +134,17 @@ export class SqliteCalendarStore implements CalendarStore {
     return created
   }
 
+  async updateCalendar(ctx: DavContext, calendarId: string, input: UpdateCalendarInput): Promise<Calendar> {
+    const updated = await this.dav.updateCalendar(ctx, calendarId, input)
+    const userKey = deriveUserKey(ctx)
+    this.db
+      .prepare(
+        `UPDATE calendars SET display_name = ?, color = ? WHERE user_key = ? AND calendar_id = ?`,
+      )
+      .run(updated.displayName, updated.color, userKey, calendarId)
+    return updated
+  }
+
   /** TTL-gated sync-if-stale. Bounds cache staleness to at most `ttlMs`. */
   private async ensureFresh(ctx: DavContext, calendarId: string): Promise<void> {
     const userKey = deriveUserKey(ctx)
@@ -170,7 +182,7 @@ export class SqliteCalendarStore implements CalendarStore {
         updated_at = excluded.updated_at
     `)
     const deleteObject = this.db.prepare(
-      'DELETE FROM objects WHERE user_key = ? AND calendar_id = ? AND uid = ?',
+      'DELETE FROM objects WHERE user_key = ? AND calendar_id = ? AND href = ?',
     )
     const setSyncState = this.db.prepare(
       'UPDATE calendars SET sync_token = ?, last_synced_at = ? WHERE user_key = ? AND calendar_id = ?',
@@ -191,8 +203,8 @@ export class SqliteCalendarStore implements CalendarStore {
           updatedAt: now,
         })
       }
-      for (const uid of result.deletedUids) {
-        deleteObject.run(userKey, calendarId, uid)
+      for (const href of result.deletedHrefs) {
+        deleteObject.run(userKey, calendarId, href)
       }
       setSyncState.run(result.syncToken, now, userKey, calendarId)
     })
