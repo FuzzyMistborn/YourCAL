@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import ICAL from 'ical.js'
 import { safeFetchExternal } from '../dav/ssrf.js'
 import { expandCalendarObject } from './recurrence.js'
+import { registerEmbeddedTimezones } from './timezones.js'
 
 // Bounds how much work a single feed can force onto the server -- an
 // unbounded or malicious feed could otherwise contain enough VEVENTs to
@@ -30,6 +31,15 @@ export async function fetchSubscriptionEvents(url: string, range: TimeRange): Pr
   const calendarId = subscriptionCalendarId(url)
 
   const comp = new ICAL.Component(ICAL.parse(text))
+  // The per-UID VCALENDARs built below carry the VEVENTs but not the feed's
+  // VTIMEZONE components, so any TZID they reference (DTSTART;TZID=...)
+  // would otherwise be unresolvable -- registering them globally here,
+  // before expandCalendarObject re-parses each split-out ICS on its own,
+  // means the zone is already known by the time it's looked up. Same fix
+  // as importIcs.ts, but via global registration rather than carrying the
+  // VTIMEZONE along, since these per-event ICS strings are only ever used
+  // transiently within this function.
+  registerEmbeddedTimezones(comp)
   const vevents = comp.getAllSubcomponents('vevent').slice(0, MAX_SUBSCRIPTION_EVENTS)
 
   const groups = new Map<string, ICAL.Component[]>()

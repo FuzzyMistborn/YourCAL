@@ -23,4 +23,12 @@ export const config = {
   cacheEnabled: process.env.CACHE_ENABLED === 'true',
   sqlitePath: process.env.SQLITE_PATH ?? './data/cache.db',
   cacheSyncTtlMs: Number(process.env.CACHE_SYNC_TTL_MS ?? 30000),
+  // Fallback timezone the client pre-selects for a *new* event, in place of
+  // the browser's own auto-detected zone -- useful for a shared/kiosk
+  // instance, or an admin who just wants everyone defaulting to one org
+  // timezone rather than wherever each browser happens to think it is. Not
+  // validated against the IANA tz database here; an invalid value just
+  // means the client's <select> won't have a matching option pre-selected
+  // (see EventEditDialog.vue), not a startup failure.
+  defaultTimezone: process.env.DEFAULT_TIMEZONE || null,
 }

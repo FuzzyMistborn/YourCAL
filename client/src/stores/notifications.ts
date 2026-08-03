@@ -14,7 +14,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const permission = ref<NotificationPermission | 'unsupported'>(
     typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
   )
-  const scheduled = new Map<string, ReturnType<typeof setTimeout>>()
+  const scheduled = new Map<string, { handle: ReturnType<typeof setTimeout>; fireAt: number }>()
 
   // Never call this unprompted on load -- browsers throttle/block
   // permission requests not triggered by a real user gesture, and it's
@@ -40,12 +40,42 @@ export const useNotificationsStore = defineStore('notifications', () => {
     if (permission.value !== 'granted') return
     const now = Date.now()
 
+    // For every event this batch has full knowledge of (i.e. it's present,
+    // so event.alarms is its complete current alarm list), clear any
+    // previously scheduled timer for an alarm that no longer exists on it
+    // -- otherwise removing a reminder (or the whole event, so long as it's
+    // still in the reloaded batch as having zero alarms) leaves the old
+    // timer active and it still fires later.
+    const validKeysByEvent = new Map<string, Set<string>>()
+    for (const event of events) {
+      const eventPrefix = `${event.calendarId}:${event.uid}:${event.recurrenceId ?? ''}`
+      validKeysByEvent.set(eventPrefix, new Set(event.alarms.map((a) => `${eventPrefix}:${a.minutesBefore}`)))
+    }
+    for (const [key, entry] of scheduled) {
+      const eventPrefix = key.slice(0, key.lastIndexOf(':'))
+      const validKeys = validKeysByEvent.get(eventPrefix)
+      if (validKeys && !validKeys.has(key)) {
+        clearTimeout(entry.handle)
+        scheduled.delete(key)
+      }
+    }
+
     for (const event of events) {
       for (const alarm of event.alarms) {
         const key = `${event.calendarId}:${event.uid}:${event.recurrenceId ?? ''}:${alarm.minutesBefore}`
-        if (scheduled.has(key)) continue
-
         const fireAt = DateTime.fromISO(event.start).minus({ minutes: alarm.minutesBefore }).toMillis()
+
+        // Editing an event (e.g. moving its start time) doesn't change this
+        // key, only fireAt -- without checking fireAt too, the stale timer
+        // from before the edit would stay scheduled and fire at the old
+        // time instead of being replaced.
+        const existing = scheduled.get(key)
+        if (existing) {
+          if (existing.fireAt === fireAt) continue
+          clearTimeout(existing.handle)
+          scheduled.delete(key)
+        }
+
         const delay = fireAt - now
         if (delay < 0 || delay > LOOKAHEAD_MS) continue
 
@@ -53,13 +83,13 @@ export const useNotificationsStore = defineStore('notifications', () => {
           scheduled.delete(key)
           fire(event, alarm.minutesBefore)
         }, delay)
-        scheduled.set(key, handle)
+        scheduled.set(key, { handle, fireAt })
       }
     }
   }
 
   function clear(): void {
-    for (const handle of scheduled.values()) clearTimeout(handle)
+    for (const { handle } of scheduled.values()) clearTimeout(handle)
     scheduled.clear()
   }
 

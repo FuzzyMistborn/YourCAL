@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, ApiRequestError } from '../api.js'
 import { clearAccountStorage } from '../lib/accountStorage.js'
+import { useNotificationsStore } from './notifications.js'
 
 export const useSessionStore = defineStore('session', () => {
   const info = ref<SessionInfo | null>(null)
@@ -32,6 +33,11 @@ export const useSessionStore = defineStore('session', () => {
     // partitioning -- clear it so the next login on this browser doesn't
     // inherit the previous user's data.
     clearAccountStorage()
+    // Pending reminder timers are scheduled from the previous account's own
+    // event data -- without cancelling them, a reminder for an event the
+    // next-logged-in user (on a shared browser/session) never opened could
+    // still fire after the switch.
+    useNotificationsStore().clear()
   }
 
   return { info, checked, refresh, login, logout, ApiRequestError }

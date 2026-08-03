@@ -1,5 +1,6 @@
 import type { LoginRequest, SessionInfo } from '@yourcal/shared'
 import type { FastifyInstance } from 'fastify'
+import { config } from '../config.js'
 import { evictClient } from '../dav/client.js'
 import { verifyCredentials } from '../dav/discovery.js'
 import { DisallowedHostError } from '../dav/hostAllowlist.js'
@@ -27,7 +28,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
     req.session.set('dav', { baseUrl: serverUrl, username, password })
 
-    const info: SessionInfo = { serverUrl, username }
+    const info: SessionInfo = { serverUrl, username, defaultTimezone: config.defaultTimezone }
     return reply.code(201).send(info)
   })
 
@@ -36,7 +37,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     if (!dav) {
       return reply.code(401).send({ error: 'not_authenticated', message: 'No active session' })
     }
-    const info: SessionInfo = { serverUrl: dav.baseUrl, username: dav.username }
+    const info: SessionInfo = { serverUrl: dav.baseUrl, username: dav.username, defaultTimezone: config.defaultTimezone }
     return reply.send(info)
   })
 

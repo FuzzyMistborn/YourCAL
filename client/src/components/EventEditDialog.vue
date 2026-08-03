@@ -2,7 +2,10 @@
 import type { AlarmFields, Calendar, CalendarObject, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useSessionStore } from '../stores/session.js'
 import TimeCombobox from './TimeCombobox.vue'
+
+const session = useSessionStore()
 
 const props = defineProps<{
   event: CalendarObject | null // null => creating a new event
@@ -77,11 +80,19 @@ const MONTHLY_ORDINALS = [1, 2, 3, 4, -1] as const
 
 const TIME_STEP_MINUTES = 5
 
-function initialDate(iso: string): string {
-  return DateTime.fromISO(iso).toFormat('yyyy-LL-dd')
+// `iso` is always a UTC instant (mapper.ts serializes via toJSDate().toISOString()),
+// so the wall-clock date/time it prints depends entirely on which zone it's
+// read back in. Without an explicit zone, Luxon converts to the *browser's*
+// local zone by default -- but the form labels these fields with the
+// event's own timezone (form.timezone), so that mismatch silently shifts
+// the displayed (and, if saved unchanged, re-saved) wall-clock time
+// whenever the viewer isn't in the event's zone. Always pass the zone the
+// field is actually labeled with.
+function initialDate(iso: string, zone: string): string {
+  return DateTime.fromISO(iso, { zone }).toFormat('yyyy-LL-dd')
 }
-function initialTime(iso: string): string {
-  const dt = DateTime.fromISO(iso)
+function initialTime(iso: string, zone: string): string {
+  const dt = DateTime.fromISO(iso, { zone })
   const roundedMinute = Math.round(dt.minute / TIME_STEP_MINUTES) * TIME_STEP_MINUTES
   return dt.set({ minute: 0, second: 0, millisecond: 0 }).plus({ minutes: roundedMinute }).toFormat('HH:mm')
 }
@@ -181,28 +192,44 @@ const initialAllDay = props.event?.allDay ?? props.initialAllDay ?? false
 const initialStartIso = props.event?.start ?? props.initialStart ?? new Date().toISOString()
 const initialEndIso = props.event?.end ?? props.initialEnd ?? initialStartIso
 
+// Intl.supportedValuesOf('timeZone') returns every IANA zone name the
+// runtime knows -- no separate timezone-data dependency needed client-side.
+const TIMEZONES = Intl.supportedValuesOf('timeZone')
+// The server's DEFAULT_TIMEZONE (see config.ts), when set and a zone name
+// this runtime actually recognizes, takes priority over the browser's own
+// auto-detected zone for a *new* event -- useful for a shared/kiosk
+// instance where "wherever this browser happens to be" isn't the zone
+// events should default to.
+const serverDefaultZone = session.info?.defaultTimezone
+const configuredDefaultZone =
+  serverDefaultZone && (TIMEZONES as string[]).includes(serverDefaultZone) ? serverDefaultZone : null
+const browserZone = configuredDefaultZone ?? DateTime.local().zoneName
+
+// The zone every initial date/time field below is read in -- must match
+// what the Time zone select ends up labeled with (form.timezone), or the
+// displayed wall-clock time silently disagrees with the label (see
+// initialDate/initialTime's doc comment). All-day events have no timezone
+// of their own; their ISO instants are UTC-midnight-anchored calendar
+// dates, so those are read back in UTC rather than the event's/browser's zone.
+const initialZone = initialAllDay ? 'utc' : (props.event?.timezone ?? browserZone)
+
 // All-day events are stored/transmitted with an *exclusive* end (CalDAV's
 // DTEND convention: a single-day event has end = start + 1 day) but the
 // End field should show the *inclusive* last day, like every calendar UI
 // users are used to -- otherwise a plain one-day all-day event defaults to
 // showing "tomorrow" in the End field, which reads as a bug.
 const initialEndDateDisplay = initialAllDay
-  ? DateTime.fromISO(initialEndIso).minus({ days: 1 }).toFormat('yyyy-LL-dd')
-  : initialDate(initialEndIso)
+  ? DateTime.fromISO(initialEndIso, { zone: initialZone }).minus({ days: 1 }).toFormat('yyyy-LL-dd')
+  : initialDate(initialEndIso, initialZone)
 
-const defaultUntil = DateTime.fromISO(initialStartIso).plus({ months: 3 }).toFormat('yyyy-LL-dd')
-const startDt = DateTime.fromISO(initialStartIso)
+const defaultUntil = DateTime.fromISO(initialStartIso, { zone: initialZone }).plus({ months: 3 }).toFormat('yyyy-LL-dd')
+const startDt = DateTime.fromISO(initialStartIso, { zone: initialZone })
 const defaultWeekday = ISO_WEEKDAY_TO_CODE[startDt.weekday - 1]
 // "Nth weekday of the month" ordinal for the start date's own day -- e.g.
 // Aug 11 2026 is the 2nd Tuesday, so that's the default if the user
 // switches to "on the Nth weekday" mode without picking an ordinal.
 const defaultMonthlyOrdinal = Math.ceil(startDt.day / 7)
 const parsedRepeat = parseRepeat(props.event?.rrule ?? null, defaultUntil, defaultWeekday, defaultMonthlyOrdinal)
-
-// Intl.supportedValuesOf('timeZone') returns every IANA zone name the
-// runtime knows -- no separate timezone-data dependency needed client-side.
-const TIMEZONES = Intl.supportedValuesOf('timeZone')
-const browserZone = DateTime.local().zoneName
 
 const form = reactive({
   calendarId: props.event?.calendarId ?? props.defaultCalendarId,
@@ -211,10 +238,10 @@ const form = reactive({
   location: props.event?.location ?? '',
   allDay: initialAllDay,
   timezone: props.event?.timezone ?? browserZone,
-  startDate: initialDate(initialStartIso),
-  startTime: initialTime(initialStartIso),
+  startDate: initialDate(initialStartIso, initialZone),
+  startTime: initialTime(initialStartIso, initialZone),
   endDate: initialEndDateDisplay,
-  endTime: initialTime(initialEndIso),
+  endTime: initialTime(initialEndIso, initialZone),
   repeat: parsedRepeat.repeat,
   repeatInterval: parsedRepeat.interval,
   repeatEnd: parsedRepeat.end,
@@ -229,7 +256,7 @@ const form = reactive({
   // Extra one-off occurrence dates on top of the RRULE -- date-only
   // ('yyyy-LL-dd'), always interpreted in form.timezone like the rest of
   // the form's date/time fields.
-  rdates: (props.event?.rdate ?? []).map((iso) => DateTime.fromISO(iso).toFormat('yyyy-LL-dd')),
+  rdates: (props.event?.rdate ?? []).map((iso) => DateTime.fromISO(iso, { zone: initialZone }).toFormat('yyyy-LL-dd')),
 })
 
 function addRdate(): void {
@@ -396,13 +423,22 @@ function onSubmit(): void {
     rrule: buildRrule(),
     color: form.color || null,
     alarms: buildAlarms(),
+    // Not gated on form.repeat !== 'none' -- an RDATE-only event (extra
+    // one-off dates with no RRULE at all) has form.repeat === 'none' too,
+    // and gating on it silently dropped those dates on every save. The
+    // "Add extra date" control is still repeat-only in the UI, but an
+    // existing rdate the form was seeded with must survive an unrelated
+    // edit regardless.
     rdate:
-      form.repeat !== 'none' && form.rdates.length > 0
+      form.rdates.length > 0
         ? form.rdates.map(
             (d) =>
               (form.allDay
                 ? DateTime.fromFormat(d, 'yyyy-LL-dd')
-                : DateTime.fromFormat(d, 'yyyy-LL-dd', { zone: form.timezone })
+                : // Time-of-day, not just the date -- otherwise every extra
+                  // occurrence silently starts at midnight instead of the
+                  // event's normal start time.
+                  DateTime.fromFormat(`${d} ${form.startTime}`, 'yyyy-LL-dd HH:mm', { zone: form.timezone })
               ).toISO() ?? new Date().toISOString(),
           )
         : [],

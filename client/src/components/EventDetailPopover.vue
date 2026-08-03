@@ -55,8 +55,15 @@ onBeforeUnmount(() => {
 })
 
 const timeRangeText = computed(() => {
-  const start = DateTime.fromISO(props.event.start)
-  const end = DateTime.fromISO(props.event.end)
+  // All-day instants are UTC-midnight-anchored calendar dates with no
+  // timezone of their own (see mapper.ts) -- parsing them in the browser's
+  // local zone (Luxon's default with no `zone` option) can land on the
+  // *previous* calendar day in any negative-offset zone (e.g. an Aug 5
+  // event showing as Aug 4 in Los Angeles/New York). Read them back in UTC
+  // instead, same fix as EventEditDialog's initialZone.
+  const zone = props.event.allDay ? 'utc' : undefined
+  const start = DateTime.fromISO(props.event.start, { zone })
+  const end = DateTime.fromISO(props.event.end, { zone })
 
   if (props.event.allDay) {
     // end is CalDAV's exclusive end -- the last inclusive day is end - 1.
