@@ -60,7 +60,15 @@ export function applyThisOccurrence(ics: string, recurrenceId: string, fields: E
     if (rid && rid.toJSDate().toISOString() === recurrenceId) comp.removeSubcomponent(v)
   }
 
-  const override = buildVeventComponent(uid, fields)
+  // An override (RECURRENCE-ID) VEVENT must never carry its own RRULE per
+  // RFC 5545 -- but the client can't tell "editing a single occurrence"
+  // apart from "editing the master" when populating its repeat picker (it
+  // only ever sees one CalendarObject, whose .rrule reflects whatever
+  // VEVENT it was actually built from -- the master's, for a not-yet-
+  // overridden occurrence), so it currently reconstructs and resends the
+  // inherited RRULE even for a `scope: 'this'` edit. Defensively strip it
+  // here regardless of what the client sent, rather than trusting it.
+  const override = buildVeventComponent(uid, { ...fields, rrule: null })
   override.updatePropertyWithValue('recurrence-id', icalTimeFromIso(recurrenceId, masterIsAllDay(master)))
   comp.addSubcomponent(override)
   ICAL.helpers.updateTimezones(comp)
