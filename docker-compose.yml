@@ -23,6 +23,10 @@ services:
       CACHE_ENABLED: ${CACHE_ENABLED:-false}
       SQLITE_PATH: /app/data/cache.db
       CACHE_SYNC_TTL_MS: ${CACHE_SYNC_TTL_MS:-30000}
+      # IANA zone name (e.g. America/New_York) the client pre-selects for a
+      # new event, in place of each browser's own auto-detected zone --
+      # unset (the default) leaves that browser-detection behavior alone.
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-}
       # NODE_ENV=production (set in the Dockerfile) marks the session
       # cookie Secure (server/src/session.ts) -- browsers will refuse to
       # send it over plain HTTP. Put a TLS-terminating reverse proxy in

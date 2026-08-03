@@ -61,6 +61,9 @@ export function expandCalendarObject(
     masterEvent.relateException(override)
   }
 
+  const masterRruleProp = master.getFirstPropertyValue('rrule') as { toString(): string } | null
+  const masterRrule = masterRruleProp ? masterRruleProp.toString() : null
+
   const results: CalendarObject[] = []
   const iterator = masterEvent.iterator()
   let occurrenceTime: ICAL.Time | null
@@ -73,7 +76,10 @@ export function expandCalendarObject(
     const details = masterEvent.getOccurrenceDetails(occurrenceTime)
     // details.item may be the master (plain occurrence) or an exception
     // VEVENT; details.startDate/endDate are always the correct
-    // occurrence-specific times regardless of which one it is.
+    // occurrence-specific times regardless of which one it is. isRecurring
+    // and rrule are always taken from the *master* (not details.item) --
+    // an exception VEVENT never carries its own RRULE, so it would
+    // otherwise report isRecurring: false and look like a standalone event.
     results.push(
       buildCalendarObject(details.item, {
         calendarId,
@@ -82,6 +88,8 @@ export function expandCalendarObject(
         start: details.startDate,
         end: details.endDate,
         recurrenceId: details.recurrenceId.toJSDate().toISOString(),
+        isRecurring: true,
+        rrule: masterRrule,
       }),
     )
   }

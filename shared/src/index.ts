@@ -106,6 +106,9 @@ export interface SyncResult {
 export interface SessionInfo {
   serverUrl: string
   username: string
+  // Server-configured fallback timezone (DEFAULT_TIMEZONE env var), or null
+  // if unset -- the client falls back further to the browser's own zone.
+  defaultTimezone: string | null
 }
 
 export interface LoginRequest {

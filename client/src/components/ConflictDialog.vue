@@ -12,7 +12,11 @@ const props = defineProps<{
 const emit = defineEmits<{ discard: []; reapply: [] }>()
 
 function whenText(event: CalendarObject): string {
-  const start = DateTime.fromISO(event.start)
+  // See EventDetailPopover's timeRangeText: an all-day instant is a
+  // UTC-midnight-anchored calendar date, not a real timezone-bearing
+  // instant -- read in the browser's local zone (Luxon's default), it can
+  // land on the previous day in any negative-offset zone.
+  const start = DateTime.fromISO(event.start, { zone: event.allDay ? 'utc' : undefined })
   return event.allDay ? start.toFormat('LLL d, yyyy') : start.toFormat('LLL d, h:mm a')
 }
 </script>

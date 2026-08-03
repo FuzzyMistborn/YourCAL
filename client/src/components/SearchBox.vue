@@ -16,7 +16,8 @@ let debounceHandle: ReturnType<typeof setTimeout> | null = null
 let requestSeq = 0
 
 function formatWhen(event: CalendarObject): string {
-  const dt = DateTime.fromISO(event.start)
+  // Same all-day/UTC-vs-local-zone fix as EventDetailPopover's timeRangeText.
+  const dt = DateTime.fromISO(event.start, { zone: event.allDay ? 'utc' : undefined })
   return event.allDay ? dt.toFormat('LLL d, yyyy') : dt.toFormat('LLL d, h:mm a')
 }
 

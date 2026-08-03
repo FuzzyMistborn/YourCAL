@@ -39,6 +39,17 @@ export function buildCalendarObject(
     start: ICAL.Time
     end: ICAL.Time
     recurrenceId: string | null
+    // A per-occurrence override (RECURRENCE-ID) VEVENT never carries its
+    // own RRULE (RFC 5545 forbids it), so `event.isRecurring()`/its own
+    // rrule property are always false/null for one -- even though it's
+    // still an occurrence of a recurring series. expandCalendarObject
+    // passes the *master*'s values through here for exception occurrences
+    // so the client can still tell it's part of a series (and route
+    // edits/deletes through the recurrence-scope dialog instead of
+    // silently treating it as a standalone event). Defaults to the
+    // event's own values for the plain (non-exception) case.
+    isRecurring?: boolean
+    rrule?: string | null
   },
 ): CalendarObject {
   const rruleProp = event.component.getFirstPropertyValue('rrule') as { toString(): string } | null
@@ -56,8 +67,8 @@ export function buildCalendarObject(
     allDay: opts.start.isDate,
     timezone: opts.start.isDate ? null : (opts.start.zone?.tzid ?? null),
     recurrenceId: opts.recurrenceId,
-    isRecurring: event.isRecurring(),
-    rrule: rruleProp ? rruleProp.toString() : null,
+    isRecurring: opts.isRecurring ?? event.isRecurring(),
+    rrule: opts.rrule ?? (rruleProp ? rruleProp.toString() : null),
     color: (event.component.getFirstPropertyValue('color') as string | null) ?? null,
     alarms: parseAlarms(event.component),
     rdate: parseRdates(event.component),
@@ -131,18 +142,36 @@ export function buildVeventComponent(uid: string, fields: EventFields): ICAL.Com
     vevent.updatePropertyWithValue('color', fields.color)
   }
 
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/
   for (const iso of fields.rdate) {
     // Same value-type handling as dtstart/dtend above: a real DATE-typed
     // value for all-day events (no JS-Date/timezone round trip), a proper
     // zone-converted DATE-TIME otherwise -- addPropertyWithValue with an
     // ICAL.Time, never a raw string (RDATE has no RRULE-style
     // Recur.fromString requirement, but there's no reason to risk it).
-    let rdateTime = fields.allDay
-      ? ICAL.Time.fromDateString(iso.slice(0, 10))
-      : ICAL.Time.fromJSDate(new Date(iso), true)
-    if (!fields.allDay && fields.timezone) {
-      const zone = ICAL.TimezoneService.get(fields.timezone)
-      if (zone) rdateTime = rdateTime.convertToZone(zone)
+    let rdateTime: ICAL.Time
+    if (fields.allDay) {
+      rdateTime = ICAL.Time.fromDateString(iso.slice(0, 10))
+    } else if (dateOnly.test(iso)) {
+      // A date-only (no time-of-day) RDATE for a timed event has no
+      // instant to parse as a JS Date -- doing so anyway would default to
+      // UTC midnight, which convertToZone then shifts to the *previous*
+      // calendar day in any negative-offset timezone. Build the wall-clock
+      // components directly in the event's own timezone instead, the same
+      // "reassigning .zone relabels, doesn't convert" approach the master
+      // dtstart/dtend construction above relies on.
+      const [year, month, day] = iso.split('-').map(Number)
+      rdateTime = ICAL.Time.fromData({ year, month, day, hour: 0, minute: 0, second: 0, isDate: false })
+      if (fields.timezone) {
+        const zone = ICAL.TimezoneService.get(fields.timezone)
+        if (zone) rdateTime.zone = zone
+      }
+    } else {
+      rdateTime = ICAL.Time.fromJSDate(new Date(iso), true)
+      if (fields.timezone) {
+        const zone = ICAL.TimezoneService.get(fields.timezone)
+        if (zone) rdateTime = rdateTime.convertToZone(zone)
+      }
     }
     vevent.addPropertyWithValue('rdate', rdateTime)
   }

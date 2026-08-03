@@ -25,8 +25,25 @@ function masterIsAllDay(master: ICAL.Component): boolean {
   return (master.getFirstPropertyValue('dtstart') as ICAL.Time).isDate
 }
 
+// For all-day (DATE-typed) instants, fromJSDate would convert through the
+// JS Date first (shifting across a UTC/local boundary depending on the
+// server's own timezone) -- fromDateString builds a real DATE-typed value
+// directly from the date portion of the ISO string, with no conversion to
+// go wrong. Same fix as buildVeventComponent's dtstart/dtend (mapper.ts).
 function icalTimeFromIso(iso: string, allDay: boolean): ICAL.Time {
-  return ICAL.Time.fromJSDate(new Date(iso), !allDay)
+  return allDay ? ICAL.Time.fromDateString(iso.slice(0, 10)) : ICAL.Time.fromJSDate(new Date(iso), true)
+}
+
+/** Number of `recur`'s own occurrences (starting at `dtstart`) that fall strictly before `boundary`. */
+function countOccurrencesBefore(recur: ICAL.Recur, dtstart: ICAL.Time, boundary: ICAL.Time): number {
+  const iterator = recur.iterator(dtstart)
+  let count = 0
+  let occurrence = iterator.next()
+  while (occurrence && occurrence.compare(boundary) < 0) {
+    count++
+    occurrence = iterator.next()
+  }
+  return count
 }
 
 /** Bounds a master's RRULE so it produces no occurrence at or after `boundary`. */
@@ -155,9 +172,11 @@ export function applyAll(ics: string, fields: EventFields): string {
  * toggles all-day-ness, there's no sensible delta, so those overrides are
  * dropped instead (same fallback as applyAll).
  *
- * Remaining simplification (see AGENTS.md): a COUNT-based RRULE is carried
- * into the new series unchanged, so it restarts the count from the split
- * point rather than continuing the original series's remaining occurrences.
+ * A COUNT-based RRULE has its count reduced by however many occurrences
+ * the original series already produced before the split point, so the
+ * carried rule continues the original series's remaining occurrence
+ * budget instead of restarting it (a COUNT=6 series split at occurrence 4
+ * ends up with COUNT=2 on the new series, six total, not nine).
  */
 export function applyThisAndFuture(
   ics: string,
@@ -173,6 +192,11 @@ export function applyThisAndFuture(
   // truncating or the "carried" rule silently ends up truncated too.
   const originalRrule = master.getFirstPropertyValue('rrule') as ICAL.Recur | null
   const carriedRrule = originalRrule ? originalRrule.clone() : null
+  if (carriedRrule?.count) {
+    const masterDtstart = master.getFirstPropertyValue('dtstart') as ICAL.Time
+    const occurrencesBefore = countOccurrencesBefore(originalRrule as ICAL.Recur, masterDtstart, boundary)
+    carriedRrule.count = Math.max(1, carriedRrule.count - occurrencesBefore)
+  }
 
   const migratedOverrides: ICAL.Component[] = []
   for (const v of comp.getAllSubcomponents('vevent')) {

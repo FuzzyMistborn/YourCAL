@@ -83,6 +83,13 @@ export class SqliteCalendarStore implements CalendarStore {
         is_shared = excluded.is_shared,
         ctag = excluded.ctag
     `)
+    const deleteAllCalendars = this.db.prepare('DELETE FROM calendars WHERE user_key = ?')
+    const deleteStaleCalendars =
+      calendars.length > 0
+        ? this.db.prepare(
+            `DELETE FROM calendars WHERE user_key = ? AND calendar_id NOT IN (${calendars.map(() => '?').join(',')})`,
+          )
+        : null
     const upsertAll = this.db.transaction((cals: Calendar[]) => {
       for (const cal of cals) {
         upsert.run({
@@ -96,6 +103,18 @@ export class SqliteCalendarStore implements CalendarStore {
           isShared: cal.isShared ? 1 : 0,
           ctag: cal.ctag,
         })
+      }
+      // Discovery is the live source of truth for which calendars exist --
+      // a calendar_id no longer present (deleted, unsubscribed, or a share
+      // that was revoked) must have its cached row (and, via the FK's ON
+      // DELETE CASCADE, its cached objects) removed here, or stale events
+      // from a calendar the user can no longer see stay servable forever.
+      // (SQLite's `NOT IN ()` with an empty list matches nothing, not
+      // everything, so the empty-result case needs its own query.)
+      if (cals.length === 0) {
+        deleteAllCalendars.run(userKey)
+      } else {
+        deleteStaleCalendars?.run(userKey, ...cals.map((c) => c.id))
       }
     })
     upsertAll(calendars)

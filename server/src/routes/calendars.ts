@@ -8,6 +8,7 @@ import type {
 } from '@yourcal/shared'
 import type { Calendar } from '@yourcal/shared'
 import type { FastifyInstance, FastifyReply } from 'fastify'
+import ICAL from 'ical.js'
 import { assertHrefSameHost } from '../dav/hostAllowlist.js'
 import { shareCalendar, ShareFailedError } from '../dav/sharing.js'
 import type { DavContext } from '../dav/context.js'
@@ -18,6 +19,7 @@ import { calendarObjectToIcs } from '../ical/mapper.js'
 import { eventFieldsError } from '../ical/validate.js'
 import { decodeId } from '../store/idCodec.js'
 import { EtagConflictError } from '../store/errors.js'
+import type { RawObject } from '../store/CalendarStore.js'
 import { store } from '../store/index.js'
 import { requireSession } from './requireSession.js'
 
@@ -45,6 +47,43 @@ async function requireWritableCalendar(
     return null
   }
   return calendar
+}
+
+/**
+ * Server-side gate against cross-calendar event mutation: a request can
+ * carry a writable calendarId paired with a client-supplied href/uid for a
+ * *different* calendar (e.g. one the caller can't otherwise write to). This
+ * fetches the raw object and verifies both that its href actually lives
+ * under this calendar's own collection URL and that its UID matches the
+ * one in the route -- not just that the href resolves to *some* object the
+ * caller's DAV credentials can read. 403s (having already sent a reply)
+ * when either check fails.
+ */
+async function loadOwnedRawObject(
+  dav: DavContext,
+  calendar: Calendar,
+  href: string,
+  uid: string,
+  reply: FastifyReply,
+): Promise<RawObject | null> {
+  const calendarUrl = decodeId(calendar.id)
+  assertHrefSameHost(dav.baseUrl, href)
+  const calPath = new URL(calendarUrl).pathname
+  const hrefPath = new URL(href, calendarUrl).pathname
+  if (!hrefPath.startsWith(calPath)) {
+    reply.code(403).send({ error: 'forbidden', message: 'Event does not belong to this calendar' })
+    return null
+  }
+
+  const raw = await store.getRawObject(dav, href)
+  const comp = new ICAL.Component(ICAL.parse(raw.ics))
+  const vevent = comp.getFirstSubcomponent('vevent')
+  const rawUid = vevent?.getFirstPropertyValue('uid') as string | null
+  if (rawUid !== uid) {
+    reply.code(403).send({ error: 'forbidden', message: 'Event does not belong to this calendar' })
+    return null
+  }
+  return raw
 }
 
 // Wide-enough default range for a "whole calendar" export when no
@@ -87,6 +126,15 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(400)
         .send({ error: 'bad_request', message: 'recipient and a valid permission are required' })
+    }
+
+    const calendars = await store.discoverCalendars(dav)
+    const calendar = calendars.find((c) => c.id === req.params.id)
+    if (!calendar) {
+      return reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+    }
+    if (calendar.isShared) {
+      return reply.code(403).send({ error: 'forbidden', message: 'Only the calendar owner can manage its shares' })
     }
 
     const calendarUrl = decodeId(req.params.id)
@@ -293,7 +341,8 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const dav = requireSession(req, reply)
       if (!dav) return
-      if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
+      const calendar = await requireWritableCalendar(dav, req.params.id, reply)
+      if (!calendar) return
 
       if (!req.body || typeof req.body.href !== 'string' || typeof req.body.etag !== 'string') {
         return reply.code(400).send({ error: 'bad_request', message: 'href and etag are required' })
@@ -315,7 +364,8 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
               .send({ error: 'bad_request', message: 'recurrenceId is required for this scope' })
           }
 
-          const raw = await store.getRawObject(dav, href)
+          const raw = await loadOwnedRawObject(dav, calendar, href, uid, reply)
+          if (!raw) return
 
           if (scope === 'this') {
             const newIcs = editScope.applyThisOccurrence(raw.ics, recurrenceId, fields)
@@ -323,14 +373,21 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
             return reply.send(updated)
           }
 
+          // Create the new (future) series before truncating the old one --
+          // if creation fails, the old series is untouched rather than
+          // silently losing every future occurrence. The reverse order risks
+          // a duplicate/orphaned new series on truncate failure instead,
+          // which is recoverable by hand; losing the future occurrences
+          // outright is not.
           const split = editScope.applyThisAndFuture(raw.ics, recurrenceId, fields)
-          const updated = await store.updateObject(dav, { calendarId, uid, href, etag }, split.updatedIcs)
           const newSeries = await store.createObject(dav, calendarId, split.newSeriesIcs)
+          const updated = await store.updateObject(dav, { calendarId, uid, href, etag }, split.updatedIcs)
           return reply.send({ updatedSeries: updated, newSeries })
         }
 
         // scope === 'all'
-        const raw = await store.getRawObject(dav, href)
+        const raw = await loadOwnedRawObject(dav, calendar, href, uid, reply)
+        if (!raw) return
         const newIcs = editScope.applyAll(raw.ics, fields)
         const updated = await store.updateObject(dav, { calendarId, uid, href, etag }, newIcs)
         return reply.send(updated)
@@ -366,7 +423,8 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const dav = requireSession(req, reply)
       if (!dav) return
-      if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
+      const calendar = await requireWritableCalendar(dav, req.params.id, reply)
+      if (!calendar) return
 
       if (!req.body || typeof req.body.href !== 'string' || typeof req.body.etag !== 'string') {
         return reply.code(400).send({ error: 'bad_request', message: 'href and etag are required' })
@@ -377,11 +435,13 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         if (scope === 'all' || !recurrenceId) {
+          if (!(await loadOwnedRawObject(dav, calendar, href, uid, reply))) return
           await store.deleteObject(dav, { calendarId, uid, href, etag })
           return reply.code(204).send()
         }
 
-        const raw = await store.getRawObject(dav, href)
+        const raw = await loadOwnedRawObject(dav, calendar, href, uid, reply)
+        if (!raw) return
         const newIcs =
           scope === 'this'
             ? editScope.deleteThisOccurrence(raw.ics, recurrenceId)

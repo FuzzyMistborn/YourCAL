@@ -43,6 +43,13 @@ const weekStartModel = computed<WeekStart>({
 const enabledCalendarIds = computed(() =>
   calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id]).map((c) => c.id),
 )
+// New events can only ever go into a writable, currently-visible calendar --
+// used to gate the "New event" button and to seed the create dialog's
+// default calendar, so it can't open with an empty or read-only id that
+// would only fail once the user actually submits.
+const writableEnabledCalendarIds = computed(() =>
+  calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id] && !c.readOnly).map((c) => c.id),
+)
 const calendarColors = computed(() => {
   const fromCalendars = Object.fromEntries(calendarsStore.calendars.map((c) => [c.id, calendarsStore.colorFor(c.id)]))
   const fromSubscriptions = Object.fromEntries(subscriptionsStore.subscriptions.map((s) => [s.id, s.color]))
@@ -73,13 +80,29 @@ const rawVisibleEvents = computed(() => {
 })
 
 watch(rawVisibleEvents, (events) => notificationsStore.scheduleForEvents(events))
+// Permission is granted via an explicit user gesture (the "Enable
+// notifications" button), typically well after events have already loaded
+// -- without this, reminders for whatever's currently visible only start
+// working after the next unrelated reload/navigation happens to re-fire
+// the watcher above.
+watch(
+  () => notificationsStore.permission,
+  (permission) => {
+    if (permission === 'granted') notificationsStore.scheduleForEvents(rawVisibleEvents.value)
+  },
+)
 
 const fullCalendarEvents = computed(() => {
   return rawVisibleEvents.value.map((e) => ({
     id: `${e.calendarId}:${e.uid}:${e.recurrenceId ?? ''}`,
     title: e.summary,
-    start: e.start,
-    end: e.end,
+    // All-day instants are UTC-midnight-anchored calendar dates (see
+    // mapper.ts), not real instants in any timezone -- handing FullCalendar
+    // the full ISO datetime lets it apply its own (local-zone-by-default)
+    // conversion, landing on the previous day in any negative-offset zone.
+    // A bare date string sidesteps that entirely.
+    start: e.allDay ? e.start.slice(0, 10) : e.start,
+    end: e.allDay ? e.end.slice(0, 10) : e.end,
     allDay: e.allDay,
     backgroundColor: e.color ?? calendarColors.value[e.calendarId],
     borderColor: e.color ?? calendarColors.value[e.calendarId],
@@ -90,12 +113,19 @@ const fullCalendarEvents = computed(() => {
 
 async function loadVisibleRange(): Promise<void> {
   if (!visibleRange.value) return
-  await Promise.all([
-    enabledCalendarIds.value.length > 0
-      ? eventsStore.loadRange(enabledCalendarIds.value, visibleRange.value.start, visibleRange.value.end)
-      : Promise.resolve(),
-    subscriptionsStore.loadRange(visibleRange.value.start, visibleRange.value.end),
-  ])
+  try {
+    await Promise.all([
+      enabledCalendarIds.value.length > 0
+        ? eventsStore.loadRange(enabledCalendarIds.value, visibleRange.value.start, visibleRange.value.end)
+        : Promise.resolve(),
+      subscriptionsStore.loadRange(visibleRange.value.start, visibleRange.value.end),
+    ])
+  } catch {
+    // eventsStore.loadRange already commits whatever calendars *did* load
+    // successfully (see its own allSettled handling) -- this is purely to
+    // surface that some calendar failed, not to discard the rest.
+    errorBanner.value = 'Some calendars failed to load. Showing what loaded successfully.'
+  }
 }
 
 function onDatesSet(arg: DatesSetArg): void {
@@ -153,6 +183,10 @@ function onDetailDelete(): void {
 }
 
 function onSelect(arg: DateSelectArg): void {
+  if (writableEnabledCalendarIds.value.length === 0) {
+    errorBanner.value = 'No writable calendar is available -- enable or create one first.'
+    return
+  }
   createSlot.value = { start: arg.start.toISOString(), end: arg.end.toISOString(), allDay: arg.allDay }
   isCreating.value = true
 }
@@ -385,6 +419,10 @@ async function onLogout(): Promise<void> {
 }
 
 function onNewEventClick(): void {
+  if (writableEnabledCalendarIds.value.length === 0) {
+    errorBanner.value = 'No writable calendar is available -- enable or create one first.'
+    return
+  }
   const start = new Date()
   start.setMinutes(0, 0, 0)
   start.setHours(start.getHours() + 1)
@@ -425,7 +463,10 @@ function onSearchSelect(event: CalendarObject): void {
 const showImportDialog = ref(false)
 
 function onImported(): void {
-  showImportDialog.value = false
+  // Don't close the dialog here -- ImportDialog just set its own
+  // "Imported N of M events" result text in the same tick, and closing
+  // immediately hid it before the user could ever see it. The dialog's own
+  // Close button (@close) is how the user dismisses it now.
   void eventsStore.reloadLastRange()
 }
 
@@ -474,7 +515,12 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       <SearchBox @select="onSearchSelect" />
 
       <div class="sidebar__actions">
-        <button class="btn btn-primary sidebar__new" @click="onNewEventClick">
+        <button
+          class="btn btn-primary sidebar__new"
+          :disabled="writableEnabledCalendarIds.length === 0"
+          :title="writableEnabledCalendarIds.length === 0 ? 'No writable calendar is available' : undefined"
+          @click="onNewEventClick"
+        >
           <span aria-hidden="true">+</span> New event
         </button>
         <button class="btn btn-secondary sidebar__import" title="Import .ics file" @click="showImportDialog = true">
@@ -540,7 +586,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     <ImportDialog
       v-if="showImportDialog"
       :calendars="calendarsStore.calendars"
-      :default-calendar-id="enabledCalendarIds[0] ?? ''"
+      :default-calendar-id="writableEnabledCalendarIds[0] ?? ''"
       @imported="onImported"
       @close="showImportDialog = false"
     />
@@ -559,7 +605,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       v-if="isCreating && createSlot"
       :event="null"
       :calendars="calendarsStore.calendars"
-      :default-calendar-id="enabledCalendarIds[0] ?? ''"
+      :default-calendar-id="writableEnabledCalendarIds[0] ?? ''"
       :initial-start="createSlot.start"
       :initial-end="createSlot.end"
       :initial-all-day="createSlot.allDay"

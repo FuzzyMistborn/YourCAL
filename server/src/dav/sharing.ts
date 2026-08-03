@@ -136,6 +136,17 @@ async function tryRadicaleShare(
       body: JSON.stringify({ PathOrToken: targetPathOrToken }),
     })
     if (!res.ok) {
+      // Only clean up if this call is what created the map entry -- if we
+      // reused an existing (e.g. previously-unsubscribed) entry, it was
+      // already in some valid state before we touched it, so leave it
+      // alone rather than deleting a share that predates this request.
+      if (!existingPathOrToken) {
+        await fetch(`${ctx.baseUrl}/.sharing/v1/map/delete`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ PathOrToken: targetPathOrToken }),
+        }).catch(() => {})
+      }
       throw new ShareFailedError(`Radicale map/${action} failed: ${res.status}`)
     }
   }
