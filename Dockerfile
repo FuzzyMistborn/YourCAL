@@ -4,7 +4,7 @@
 # ../../client/dist), so this produces a single runtime image rather than
 # separate server/client images.
 
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /app
 
 # better-sqlite3 (a server dependency) compiles a native addon via
@@ -33,7 +33,7 @@ RUN npm run build
 # removes package entries, not rebuild anything.
 RUN npm prune --omit=dev
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
