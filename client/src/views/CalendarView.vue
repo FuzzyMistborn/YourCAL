@@ -215,6 +215,10 @@ async function onCreateSave(calendarId: string, fields: EventFields): Promise<vo
   closeDialogs()
   try {
     await eventsStore.createEvent(calendarId, fields)
+    // The reactive `events` option update alone doesn't always make
+    // FullCalendar's Vue wrapper repaint the month grid in the same tick --
+    // force it explicitly so the new event shows up immediately.
+    fullCalendarRef.value?.getApi().refetchEvents()
   } catch (err) {
     errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to create event.'
   }
@@ -228,7 +232,7 @@ function onEditSave(calendarId: string, fields: EventFields): void {
   if (event.isRecurring) {
     pendingScopeAction.value = { kind: 'save', event, calendarId, fields }
   } else {
-    void doUpdate(event, fields, 'all')
+    void doUpdate(event, fields, 'all', calendarId)
   }
 }
 
@@ -256,12 +260,17 @@ function onConfirmDelete(): void {
 // reapply against the fresh etag, rather than the edit just vanishing. ---
 
 type PendingConflict =
-  | { kind: 'update'; event: CalendarObject; fields: EventFields; scope: EditScope }
+  | { kind: 'update'; event: CalendarObject; fields: EventFields; scope: EditScope; calendarId: string }
   | { kind: 'delete'; event: CalendarObject; scope: EditScope }
 const pendingConflict = ref<PendingConflict | null>(null)
 const conflictServerEvent = ref<CalendarObject | null>(null)
 
-async function doUpdate(event: CalendarObject, fields: EventFields, scope: EditScope): Promise<void> {
+async function doUpdate(
+  event: CalendarObject,
+  fields: EventFields,
+  scope: EditScope,
+  calendarId: string = event.calendarId,
+): Promise<void> {
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
       href: event.href,
@@ -269,12 +278,13 @@ async function doUpdate(event: CalendarObject, fields: EventFields, scope: EditS
       fields,
       scope,
       recurrenceId: event.recurrenceId,
+      calendarId,
     })
   } catch (err) {
     if (err instanceof ApiRequestError && err.status === 412) {
       await eventsStore.reloadLastRange()
       conflictServerEvent.value = eventsStore.findEvent(event.calendarId, event.uid, event.recurrenceId) ?? null
-      pendingConflict.value = { kind: 'update', event, fields, scope }
+      pendingConflict.value = { kind: 'update', event, fields, scope, calendarId }
       return
     }
     errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to save event.'
@@ -316,7 +326,12 @@ function onConflictReapply(): void {
   // field-level merge, which is a reasonable v1 scope for a personal
   // calendar app (see the approved plan).
   if (conflict.kind === 'update') {
-    void doUpdate({ ...conflict.event, etag: fresh.etag, href: fresh.href }, conflict.fields, conflict.scope)
+    void doUpdate(
+      { ...conflict.event, etag: fresh.etag, href: fresh.href },
+      conflict.fields,
+      conflict.scope,
+      conflict.calendarId,
+    )
   } else {
     void doDelete({ ...conflict.event, etag: fresh.etag, href: fresh.href }, conflict.scope)
   }
@@ -328,7 +343,7 @@ function onScopeChosen(scope: EditScope): void {
   if (!action) return
 
   if (action.kind === 'save') {
-    void doUpdate(action.event, action.fields, scope)
+    void doUpdate(action.event, action.fields, scope, action.calendarId)
   } else {
     void doDelete(action.event, scope)
   }

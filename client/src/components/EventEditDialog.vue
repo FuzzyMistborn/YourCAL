@@ -459,7 +459,7 @@ onMounted(() => {
       <input ref="titleInput" v-model="form.summary" class="dialog__title" type="text" placeholder="Add title" required />
 
       <div class="field-row">
-        <label v-if="!isEditing" class="field">
+        <label class="field">
           <span>Calendar</span>
           <select v-model="form.calendarId">
             <option v-for="cal in calendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>

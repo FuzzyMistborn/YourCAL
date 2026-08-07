@@ -7,20 +7,43 @@ import { useSessionStore } from '../stores/session.js'
 const session = useSessionStore()
 const router = useRouter()
 
-const serverUrl = ref('')
+const LAST_SERVER_URL_KEY = 'calendar.lastServerUrl'
+
+const serverUrl = ref(localStorage.getItem(LAST_SERVER_URL_KEY) ?? '')
 const username = ref('')
 const password = ref('')
 const error = ref<string | null>(null)
 const submitting = ref(false)
 
+function hasScheme(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
 async function onSubmit(): Promise<void> {
   error.value = null
   submitting.value = true
+  const trimmed = serverUrl.value.trim()
+
+  // When the user didn't specify a scheme, try https first and fall back to
+  // http -- the server folds connection failures and bad credentials into
+  // the same 401, so we can't tell "wrong scheme" apart from "wrong password"
+  // and must just attempt both.
+  const candidates = hasScheme(trimmed) ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`]
+
+  let lastErr: unknown
   try {
-    await session.login(serverUrl.value, username.value, password.value)
-    await router.push({ name: 'calendar' })
-  } catch (err) {
-    error.value = err instanceof ApiRequestError ? err.message : 'Could not sign in. Please try again.'
+    for (const candidate of candidates) {
+      try {
+        await session.login(candidate, username.value, password.value)
+        serverUrl.value = candidate
+        localStorage.setItem(LAST_SERVER_URL_KEY, candidate)
+        await router.push({ name: 'calendar' })
+        return
+      } catch (err) {
+        lastErr = err
+      }
+    }
+    error.value = lastErr instanceof ApiRequestError ? lastErr.message : 'Could not sign in. Please try again.'
   } finally {
     submitting.value = false
   }
@@ -42,12 +65,12 @@ async function onSubmit(): Promise<void> {
 
       <label>
         <span>Server URL</span>
-        <input v-model="serverUrl" type="url" placeholder="https://caldav.example.com/" required autofocus />
+        <input v-model="serverUrl" type="text" placeholder="caldav.example.com (https:// assumed)" required />
       </label>
 
       <label>
         <span>Username</span>
-        <input v-model="username" type="text" autocomplete="username" required />
+        <input v-model="username" type="text" autocomplete="username" required :autofocus="!!serverUrl" />
       </label>
 
       <label>

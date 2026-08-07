@@ -7,6 +7,14 @@ function rangeKey(calendarId: string, start: string, end: string): string {
   return `${calendarId}:${start}:${end}`
 }
 
+// How long a cached range is trusted before re-requesting it from the
+// server on navigation. The server already TTL-gates its own upstream
+// CalDAV sync, so this is purely about skipping the client<->server round
+// trip when flipping back to a month/week already viewed moments ago --
+// short enough that edits made from a *different* browser tab/device
+// during the window are still picked up promptly.
+const FRESH_MS = 30_000
+
 export const useEventsStore = defineStore('events', () => {
   const byRange = ref<Record<string, CalendarObject[]>>({})
   // Timestamp each range's data was last written, so findEvent can prefer
@@ -25,25 +33,38 @@ export const useEventsStore = defineStore('events', () => {
   // still the most recently started call by the time it resolves.
   let loadSeq = 0
 
-  async function loadRange(calendarIds: string[], start: string, end: string): Promise<void> {
+  async function loadRange(calendarIds: string[], start: string, end: string, force = false): Promise<void> {
     const seq = ++loadSeq
-    loading.value = true
     lastLoadedIds.value = calendarIds
     lastRange.value = { start, end }
+
+    // Skip calendars whose exact range is already cached and still fresh --
+    // e.g. flipping back to a month viewed moments ago -- rather than
+    // re-requesting data we already have.
+    const now = Date.now()
+    const idsToFetch = force
+      ? calendarIds
+      : calendarIds.filter((id) => {
+          const loadedAt = rangeLoadedAt.value[rangeKey(id, start, end)]
+          return loadedAt === undefined || now - loadedAt >= FRESH_MS
+        })
+    if (idsToFetch.length === 0) return
+
+    loading.value = true
     try {
       // allSettled, not all -- one calendar erroring (e.g. a stale/revoked
       // share, a flaky upstream CalDAV server) shouldn't blank out every
       // *other* calendar's already-successful results just because they
       // were requested together.
       const results = await Promise.allSettled(
-        calendarIds.map(async (id) => {
+        idsToFetch.map(async (id) => {
           const events = await api.listEvents(id, start, end)
           return [id, events] as const
         }),
       )
       if (seq !== loadSeq) return // superseded by a newer loadRange call
 
-      const now = Date.now()
+      const loadedAt = Date.now()
       const failures: unknown[] = []
       for (const result of results) {
         if (result.status === 'rejected') {
@@ -53,7 +74,7 @@ export const useEventsStore = defineStore('events', () => {
         const [id, events] = result.value
         const key = rangeKey(id, start, end)
         byRange.value[key] = events
-        rangeLoadedAt.value[key] = now
+        rangeLoadedAt.value[key] = loadedAt
       }
       if (failures.length > 0) {
         throw new Error(`Failed to load ${failures.length} of ${calendarIds.length} calendar(s)`, {
@@ -67,7 +88,7 @@ export const useEventsStore = defineStore('events', () => {
 
   async function reloadLastRange(): Promise<void> {
     if (!lastRange.value) return
-    await loadRange(lastLoadedIds.value, lastRange.value.start, lastRange.value.end)
+    await loadRange(lastLoadedIds.value, lastRange.value.start, lastRange.value.end, true)
   }
 
   function eventsFor(calendarIds: string[], start: string, end: string): CalendarObject[] {

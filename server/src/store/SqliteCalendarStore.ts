@@ -9,6 +9,7 @@ import type {
 } from '@yourcal/shared'
 import type Database from 'better-sqlite3'
 import type { DavContext } from '../dav/context.js'
+import { computeObjectBounds } from '../ical/bounds.js'
 import { expandCalendarObject } from '../ical/recurrence.js'
 import type { CalendarStore, ObjectRef, RawObject, RawObjectWithHref } from './CalendarStore.js'
 import { deriveUserKey } from './sqlite/userKey.js'
@@ -192,13 +193,15 @@ export class SqliteCalendarStore implements CalendarStore {
     )
 
     const upsertObject = this.db.prepare(`
-      INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at)
-      VALUES (@userKey, @calendarId, @uid, @href, @etag, @ics, @updatedAt)
+      INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts)
+      VALUES (@userKey, @calendarId, @uid, @href, @etag, @ics, @updatedAt, @startTs, @endTs)
       ON CONFLICT(user_key, calendar_id, uid) DO UPDATE SET
         href = excluded.href,
         etag = excluded.etag,
         ics = excluded.ics,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        start_ts = excluded.start_ts,
+        end_ts = excluded.end_ts
     `)
     const deleteObject = this.db.prepare(
       'DELETE FROM objects WHERE user_key = ? AND calendar_id = ? AND href = ?',
@@ -212,6 +215,7 @@ export class SqliteCalendarStore implements CalendarStore {
       for (const obj of result.changed) {
         const raw = rawByHref.get(obj.href)
         if (!raw) continue // object vanished between sync-report and multiget; next sync will reconcile
+        const bounds = computeObjectBounds(raw.ics)
         upsertObject.run({
           userKey,
           calendarId,
@@ -220,6 +224,8 @@ export class SqliteCalendarStore implements CalendarStore {
           etag: raw.etag,
           ics: raw.ics,
           updatedAt: now,
+          startTs: bounds?.startTs ?? null,
+          endTs: bounds?.endTs ?? null,
         })
       }
       for (const href of result.deletedHrefs) {
@@ -234,11 +240,20 @@ export class SqliteCalendarStore implements CalendarStore {
     await this.ensureFresh(ctx, calendarId)
 
     const userKey = deriveUserKey(ctx)
+    const rangeStartTs = new Date(range.start).getTime()
+    const rangeEndTs = new Date(range.end).getTime()
+    // Coarse prefilter on the precomputed bounds -- NULL start_ts/end_ts
+    // (unparseable ICS, or an open-ended recurrence with no known upper
+    // bound) always matches so those rows fall through to the precise
+    // per-occurrence filtering expandCalendarObject already does below.
     const rows = this.db
-      .prepare<[string, string], ObjectRow>(
-        'SELECT uid, href, etag, ics FROM objects WHERE user_key = ? AND calendar_id = ?',
+      .prepare<[string, string, number, number], ObjectRow>(
+        `SELECT uid, href, etag, ics FROM objects
+         WHERE user_key = ? AND calendar_id = ?
+           AND (start_ts IS NULL OR start_ts <= ?)
+           AND (end_ts IS NULL OR end_ts >= ?)`,
       )
-      .all(userKey, calendarId)
+      .all(userKey, calendarId, rangeEndTs, rangeStartTs)
 
     const results: CalendarObject[] = []
     for (const row of rows) {
@@ -320,13 +335,15 @@ export class SqliteCalendarStore implements CalendarStore {
     etag: string,
     ics: string,
   ): void {
+    const bounds = computeObjectBounds(ics)
     this.db
       .prepare(
-        `INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_key, calendar_id, uid) DO UPDATE SET
-           href = excluded.href, etag = excluded.etag, ics = excluded.ics, updated_at = excluded.updated_at`,
+           href = excluded.href, etag = excluded.etag, ics = excluded.ics, updated_at = excluded.updated_at,
+           start_ts = excluded.start_ts, end_ts = excluded.end_ts`,
       )
-      .run(userKey, calendarId, uid, href, etag, ics, Date.now())
+      .run(userKey, calendarId, uid, href, etag, ics, Date.now(), bounds?.startTs ?? null, bounds?.endTs ?? null)
   }
 }

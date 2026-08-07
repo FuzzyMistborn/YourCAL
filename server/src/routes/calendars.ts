@@ -389,6 +389,18 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
         const raw = await loadOwnedRawObject(dav, calendar, href, uid, reply)
         if (!raw) return
         const newIcs = editScope.applyAll(raw.ics, fields)
+
+        const targetCalendarId = req.body.calendarId
+        if (targetCalendarId && targetCalendarId !== calendarId) {
+          // Moving calendars: CalDAV has no rename/move verb, so re-create the
+          // object on the target calendar and delete the original -- if the
+          // create fails, the original is untouched rather than losing the event.
+          if (!(await requireWritableCalendar(dav, targetCalendarId, reply))) return
+          const created = await store.createObject(dav, targetCalendarId, newIcs)
+          await store.deleteObject(dav, { calendarId, uid, href, etag })
+          return reply.send(created)
+        }
+
         const updated = await store.updateObject(dav, { calendarId, uid, href, etag }, newIcs)
         return reply.send(updated)
       } catch (err) {

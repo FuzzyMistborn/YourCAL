@@ -85,6 +85,10 @@ export interface UpdateEventInput {
   fields: EventFields
   scope: EditScope
   recurrenceId: string | null // required when scope is 'this' or 'thisAndFuture'
+  // Target calendar for the event. Omitted/unchanged from the current
+  // calendar for a normal edit; a different id moves the event (only
+  // supported for scope 'all' -- see routes/calendars.ts).
+  calendarId?: string
 }
 
 export interface DeleteEventInput {
