@@ -567,15 +567,10 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       </p>
 
       <div class="sidebar__user">
-        <button
-          type="button"
-          class="btn btn-ghost sidebar__username-row"
-          title="Settings"
-          @click="showSettingsDialog = true"
-        >
+        <div class="sidebar__username-row">
           <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
           <span class="sidebar__username">{{ session.info?.username }}</span>
-        </button>
+        </div>
         <div class="sidebar__user-actions">
           <button
             type="button"
