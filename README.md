@@ -32,6 +32,8 @@ npm workspaces monorepo:
 
 ## Running with Docker
 
+### From a checkout (builds the image locally)
+
 ```sh
 cp .env.example .env
 # generate a session secret and put it in .env
@@ -44,6 +46,22 @@ Edit `.env` (or set the equivalent variables in `docker-compose.yml`) —
 ```sh
 docker compose up -d --build
 ```
+
+### Without a checkout (pulls the published image)
+
+Every push to `main` publishes an image to
+`ghcr.io/fuzzymistborn/yourcal:latest` (see
+`.github/workflows/docker-publish.yml`; tagged releases also get
+`vX.Y.Z`/`vX.Y` tags). If you just want to run YourCal without cloning the
+repo, grab `docker-compose.example.yml`, rename it to `docker-compose.yml`,
+create a `.env` next to it with at least `SESSION_SECRET` set (see
+`.env.example` above for the full list of variables), then:
+
+```sh
+docker compose up -d
+```
+
+### Either way
 
 The app listens on `http://localhost:3000`. Log in with credentials for
 any CalDAV server reachable from the container (set `ALLOWED_CALDAV_HOSTS`
