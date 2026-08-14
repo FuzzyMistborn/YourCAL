@@ -10,7 +10,7 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
       <p class="dialog__message">{{ message }}</p>
       <div class="dialog__actions">
         <button type="button" class="btn btn-ghost" @click="emit('cancel')">Cancel</button>
-        <button type="button" class="btn btn-danger-solid" @click="emit('confirm')">
+        <button type="button" class="btn btn-danger" @click="emit('confirm')">
           {{ confirmLabel ?? 'Delete' }}
         </button>
       </div>
@@ -50,14 +50,6 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
-}
-.btn-danger-solid {
-  background: var(--color-danger);
-  color: white;
-  border: 1px solid transparent;
-}
-.btn-danger-solid:hover {
-  background: #b83a3a;
 }
 @keyframes fade-in {
   from {

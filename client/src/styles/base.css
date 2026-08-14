@@ -141,3 +141,48 @@ textarea:focus {
 .btn-danger:hover {
   background: var(--color-danger-soft);
 }
+
+/* Small round "+" affordance -- used for both "reveal an add-item form"
+   triggers (CalendarList, SubscriptionList) and inline "add another row"
+   buttons (EventEditDialog's extra dates/reminders), so the same "+" icon
+   language means the same thing everywhere in the app. */
+.icon-add-btn {
+  width: 1.2rem;
+  height: 1.2rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.icon-add-btn:hover {
+  background: var(--color-surface-hover);
+}
+
+/* Small "x" affordance for removing a single row/item -- used for
+   subscription removal, revoking a share, and removing an extra date/
+   reminder row in the event editor. */
+.icon-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0 0.35rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-faint);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.icon-remove-btn:hover {
+  color: var(--color-danger);
+}

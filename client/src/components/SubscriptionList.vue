@@ -37,9 +37,7 @@ function confirmRemove(): void {
   <div class="subscription-list">
     <div class="subscription-list__header">
       <h2 class="subscription-list__heading">Subscriptions</h2>
-      <button type="button" class="subscription-list__add-btn" title="Add subscription" @click="adding = !adding">
-        +
-      </button>
+      <button type="button" class="icon-add-btn" title="Add subscription" @click="adding = !adding">+</button>
     </div>
 
     <form v-if="adding" class="subscription-list__form" @submit.prevent="submitAdd">
@@ -65,15 +63,11 @@ function confirmRemove(): void {
           :title="`Color for ${sub.name}`"
           @input="onColorInput(sub.id, $event)"
         />
-        <button
-          type="button"
-          class="subscription-list__remove"
-          title="Remove"
-          @click="onRemoveClick(sub.id, sub.name)"
-        >
+        <button type="button" class="icon-remove-btn" title="Remove" @click="onRemoveClick(sub.id, sub.name)">
           ×
         </button>
       </li>
+      <li v-if="store.subscriptions.length === 0" class="subscription-list__empty">No subscriptions yet.</li>
     </ul>
 
     <ConfirmDialog
@@ -101,24 +95,6 @@ function confirmRemove(): void {
   letter-spacing: 0.06em;
   color: var(--color-text-faint);
   margin: 0;
-}
-.subscription-list__add-btn {
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 50%;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-.subscription-list__add-btn:hover {
-  background: var(--color-surface-hover);
 }
 .subscription-list__form {
   display: flex;
@@ -188,6 +164,11 @@ ul {
   font-size: 0.78rem;
   cursor: help;
 }
+.subscription-list__empty {
+  padding: 0.4rem 0.5rem;
+  color: var(--color-text-faint);
+  font-size: 0.85rem;
+}
 .subscription-list__swatch {
   -webkit-appearance: none;
   appearance: none;
@@ -211,18 +192,5 @@ ul {
 .subscription-list__swatch::-moz-color-swatch {
   border: none;
   border-radius: 50%;
-}
-.subscription-list__remove {
-  flex-shrink: 0;
-  padding: 0 0.2rem;
-  border: none;
-  background: none;
-  color: var(--color-text-faint);
-  font-size: 0.95rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.subscription-list__remove:hover {
-  color: var(--color-danger);
 }
 </style>

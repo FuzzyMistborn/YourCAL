@@ -582,11 +582,11 @@ const writableCalendars = computed(() =>
           <span class="field-group__label">Extra dates</span>
           <div v-for="(date, index) in form.rdates" :key="index" class="reminder-row">
             <input v-model="form.rdates[index]" type="date" />
-            <button type="button" class="btn btn-ghost reminder-remove" title="Remove date" @click="removeRdate(index)">
-              ×
-            </button>
+            <button type="button" class="icon-remove-btn" title="Remove date" @click="removeRdate(index)">×</button>
           </div>
-          <button type="button" class="btn btn-ghost reminder-add" @click="addRdate">+ Add extra date</button>
+          <button type="button" class="btn btn-ghost reminder-add" @click="addRdate">
+            <span class="icon-add-btn" aria-hidden="true">+</span> Add extra date
+          </button>
         </div>
 
         <div class="field-group">
@@ -627,11 +627,13 @@ const writableCalendars = computed(() =>
               {{ preset.label }}
             </option>
           </select>
-          <button type="button" class="btn btn-ghost reminder-remove" title="Remove reminder" @click="removeReminder(index)">
+          <button type="button" class="icon-remove-btn" title="Remove reminder" @click="removeReminder(index)">
             ×
           </button>
         </div>
-        <button type="button" class="btn btn-ghost reminder-add" @click="addReminder">+ Add reminder</button>
+        <button type="button" class="btn btn-ghost reminder-add" @click="addReminder">
+          <span class="icon-add-btn" aria-hidden="true">+</span> Add reminder
+        </button>
       </div>
 
       <label class="field">
@@ -748,18 +750,11 @@ const writableCalendars = computed(() =>
 .reminder-row select {
   flex: 1;
 }
-.reminder-remove {
-  flex-shrink: 0;
-  padding: 0 0.4rem;
-  font-size: 1rem;
-  line-height: 1;
-  color: var(--color-text-faint);
-}
-.reminder-remove:hover {
-  color: var(--color-danger);
-}
 .reminder-add {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.8rem;
   color: var(--color-text-faint);
   padding: 0.2rem 0.3rem;

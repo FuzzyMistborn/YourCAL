@@ -91,6 +91,11 @@ function onResetColorClick(id: string): void {
       @input="onColorInput(cal.id, $event)"
     />
 
+    <!-- Overflow menu rather than inline buttons (unlike SubscriptionList/
+         PendingSharesList/ShareCalendarDialog's share rows, which show
+         their 1-2 actions inline) -- this item alone has up to 5 actions
+         (rename/share/export/reset color/delete-or-unsubscribe), too many
+         to fit inline without crowding the row. -->
     <div class="calendar-list__menu-wrap">
       <button type="button" class="calendar-list__menu-btn" title="More options" @click="toggleMenu">⋯</button>
       <ul v-if="menuOpen" class="calendar-list__menu">
@@ -107,7 +112,7 @@ function onResetColorClick(id: string): void {
           <button type="button" @click="onResetColorClick(cal.id)">↺ Reset color</button>
         </li>
         <li v-if="!cal.isShared">
-          <button type="button" class="calendar-list__menu-danger" @click="onDeleteClick(cal)">🗑 Delete</button>
+          <button type="button" class="calendar-list__menu-danger" @click="onDeleteClick(cal)">✕ Delete</button>
         </li>
         <li v-if="cal.isShared">
           <button type="button" class="calendar-list__menu-danger" @click="onUnsubscribeClick(cal)">✕ Unsubscribe</button>

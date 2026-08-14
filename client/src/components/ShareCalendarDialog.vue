@@ -119,7 +119,7 @@ async function submit(): Promise<void> {
               </select>
               <button
                 type="button"
-                class="btn btn-ghost shares-list__revoke"
+                class="icon-remove-btn"
                 :disabled="rowBusy[share.token]"
                 title="Revoke access"
                 @click="onRevoke(share)"
@@ -204,7 +204,7 @@ async function submit(): Promise<void> {
 .shares-list__empty {
   margin: 0.15rem 0 0;
   font-size: 0.82rem;
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
 }
 .shares-list__row {
   display: flex;
@@ -233,16 +233,6 @@ async function submit(): Promise<void> {
   background: var(--color-surface);
   color: inherit;
 }
-.shares-list__revoke {
-  flex-shrink: 0;
-  padding: 0 0.3rem;
-  font-size: 1rem;
-  line-height: 1;
-  color: var(--color-text-faint);
-}
-.shares-list__revoke:hover {
-  color: var(--color-danger);
-}
 .dialog__field {
   display: flex;
   flex-direction: column;
@@ -263,8 +253,11 @@ async function submit(): Promise<void> {
 }
 .dialog__error {
   margin: 0 0 0.75rem;
-  font-size: 0.8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--color-danger-soft);
   color: var(--color-danger);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
 }
 .dialog__actions {
   display: flex;

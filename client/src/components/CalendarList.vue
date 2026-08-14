@@ -76,7 +76,7 @@ async function submitNewCalendar(): Promise<void> {
 
     <div class="calendar-list__header">
       <h2 class="calendar-list__heading">Calendars</h2>
-      <button type="button" class="calendar-list__add-btn" title="New calendar" @click="toggleNewForm">+</button>
+      <button type="button" class="icon-add-btn" title="New calendar" @click="toggleNewForm">+</button>
     </div>
 
     <form
@@ -155,24 +155,6 @@ async function submitNewCalendar(): Promise<void> {
 }
 .calendar-list__heading--shared {
   margin-top: 0.9rem;
-}
-.calendar-list__add-btn {
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 50%;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-.calendar-list__add-btn:hover {
-  background: var(--color-surface-hover);
 }
 ul {
   list-style: none;

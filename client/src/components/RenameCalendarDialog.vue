@@ -119,8 +119,11 @@ async function submit(): Promise<void> {
 }
 .dialog__error {
   margin: 0 0 0.75rem;
-  font-size: 0.8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--color-danger-soft);
   color: var(--color-danger);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
 }
 .dialog__actions {
   display: flex;
