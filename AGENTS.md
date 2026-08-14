@@ -123,8 +123,9 @@ with curl, not just typechecked:
 
 - Monorepo: `shared` (types) / `server` (Fastify API) / `client` (Vue 3 SPA), npm workspaces.
 - Session: `POST/GET/DELETE /api/session`, CalDAV server as sole identity provider, no local user store. Confirmed: real login, whoami, 401 on bad creds. See `server/src/dav/discovery.ts`, `server/src/routes/session.ts`.
-- **Session lifetime is configurable** via `SESSION_TTL_SECONDS` (default
-  86400 = 24h, `server/src/config.ts`), applied to both
+- **Session lifetime is configurable** via `SESSION_TTL_DAYS` (default
+  1 = 24h, `server/src/config.ts`; expressed in days for readability, then
+  converted to seconds internally), applied to both
   `@fastify/secure-session`'s own `expiry` option (a timestamp baked into
   the encrypted payload, checked server-side on every request) and the
   cookie's `maxAge` (`server/src/session.ts`). **Bug fixed in passing**:
@@ -134,7 +135,7 @@ with curl, not just typechecked:
   24h the payload would otherwise have allowed. Verified by inspecting a
   real login's `Set-Cookie` header before/after: previously no `Max-Age`
   was present; now `Max-Age=86400` by default, and a custom
-  `SESSION_TTL_SECONDS=1800` correctly produces `Max-Age=1800`.
+  `SESSION_TTL_DAYS` value correctly scales `Max-Age` accordingly.
 - Discovery: `GET /api/calendars` against a real Radicale principal, including picking up a calendar created out-of-band via `MKCALENDAR`.
 - Read path: `GET /api/calendars/:id/events` with a real time-range `calendar-query`, both for a single event and an expanded recurring series.
 - Write path: create/update/delete of a non-recurring event, full round trip including a genuine 412 on a stale ETag (confirmed both the false-positive case, which turned out to be a shell-quoting artifact in a manual test, and the true-positive case with an actually-stale etag).
@@ -973,7 +974,7 @@ calendar-picker gap documented under "Read-only calendar support"**:
   `initialTime` already do.
 - No client-side handling of a session expiring mid-tab: `api.ts`'s
   `request()` had no special case for a 401, so once the session TTL
-  (`SESSION_TTL_SECONDS`, default 24h) lapsed with the tab still open,
+  (`SESSION_TTL_DAYS`, default 24h) lapsed with the tab still open,
   every subsequent save/delete/drag/resize just failed with a generic
   "Failed to ..." banner and no indication the user needed to sign in
   again -- easy to hit for a calendar app, which people leave open all

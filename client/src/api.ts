@@ -29,7 +29,7 @@ export class ApiRequestError extends Error {
 // Fired whenever a request 401s outside of the login/whoami calls
 // themselves -- the app is a single-view SPA (see router.ts), so nothing
 // else re-checks auth once the initial route guard has passed, and a
-// session that expires mid-tab (default 24h, see SESSION_TTL_SECONDS)
+// session that expires mid-tab (default 24h, see SESSION_TTL_DAYS)
 // would otherwise just fail every subsequent save/delete/drag with a
 // generic error and no indication the user needs to sign in again.
 // main.ts/App.vue owns the actual redirect so this module doesn't need to

@@ -16,7 +16,9 @@ export const config = {
   // the former was set (implicitly, to the library's 24h default) and the
   // cookie had no maxAge at all, making it a browser-session cookie that's
   // wiped on browser close regardless of the 24h the payload allowed for.
-  sessionTtlSeconds: Number(process.env.SESSION_TTL_SECONDS ?? 86400),
+  // SESSION_TTL_DAYS is expressed in days (not seconds) for readability;
+  // converted here to the seconds the session/cookie logic below expects.
+  sessionTtlSeconds: Number(process.env.SESSION_TTL_DAYS ?? 1) * 86400,
   allowedCalDavHosts: process.env.ALLOWED_CALDAV_HOSTS
     ? process.env.ALLOWED_CALDAV_HOSTS.split(',').map((h) => h.trim())
     : null,
