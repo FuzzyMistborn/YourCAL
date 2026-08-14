@@ -1,15 +1,30 @@
 <script setup lang="ts">
+import type { Calendar } from '@yourcal/shared'
 import { computed, ref } from 'vue'
 import { useCalendarsStore } from '../stores/calendars.js'
+import { useSettingsStore } from '../stores/settings.js'
 import CalendarListItem from './CalendarListItem.vue'
 import PendingSharesList from './PendingSharesList.vue'
 import RenameCalendarDialog from './RenameCalendarDialog.vue'
 import ShareCalendarDialog from './ShareCalendarDialog.vue'
 
 const store = useCalendarsStore()
+const settingsStore = useSettingsStore()
 
-const ownCalendars = computed(() => store.calendars.filter((c) => !c.isShared))
-const sharedCalendars = computed(() => store.calendars.filter((c) => c.isShared))
+function sorted(calendars: Calendar[]): Calendar[] {
+  switch (settingsStore.calendarSortOrder) {
+    case 'name-asc':
+      return [...calendars].sort((a, b) => a.displayName.localeCompare(b.displayName))
+    case 'name-desc':
+      return [...calendars].sort((a, b) => b.displayName.localeCompare(a.displayName))
+    case 'server':
+    default:
+      return calendars
+  }
+}
+
+const ownCalendars = computed(() => sorted(store.calendars.filter((c) => !c.isShared)))
+const sharedCalendars = computed(() => sorted(store.calendars.filter((c) => c.isShared)))
 
 const sharingCalendar = ref<{ id: string; name: string } | null>(null)
 function onShareClick(id: string, name: string): void {

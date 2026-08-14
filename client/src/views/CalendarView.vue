@@ -16,13 +16,14 @@ import EventEditDialog from '../components/EventEditDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import RecurrenceScopeDialog from '../components/RecurrenceScopeDialog.vue'
 import SearchBox from '../components/SearchBox.vue'
+import SettingsDialog from '../components/SettingsDialog.vue'
 import SubscriptionList from '../components/SubscriptionList.vue'
 import { ApiRequestError } from '../api.js'
 import { useCalendarsStore } from '../stores/calendars.js'
 import { useEventsStore } from '../stores/events.js'
 import { useNotificationsStore } from '../stores/notifications.js'
 import { useSessionStore } from '../stores/session.js'
-import { useSettingsStore, type WeekStart } from '../stores/settings.js'
+import { useSettingsStore } from '../stores/settings.js'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
 
 const session = useSessionStore()
@@ -34,16 +35,6 @@ const subscriptionsStore = useSubscriptionsStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
-
-const weekStartModel = computed<WeekStart>({
-  get: () => settingsStore.weekStart,
-  set: (value) => settingsStore.setWeekStart(value),
-})
-
-const defaultCalendarModel = computed<string>({
-  get: () => preferredDefaultCalendarId.value,
-  set: (value) => settingsStore.setDefaultCalendarId(value),
-})
 
 const enabledCalendarIds = computed(() =>
   calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id]).map((c) => c.id),
@@ -488,6 +479,7 @@ function onSearchSelect(event: CalendarObject): void {
 }
 
 const showImportDialog = ref(false)
+const showSettingsDialog = ref(false)
 
 function onImported(): void {
   // Don't close the dialog here -- ImportDialog just set its own
@@ -559,23 +551,6 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 
       <SubscriptionList />
 
-      <label class="sidebar__setting">
-        <span>Week starts on</span>
-        <select v-model="weekStartModel">
-          <option value="sunday">Sunday</option>
-          <option value="monday">Monday</option>
-        </select>
-      </label>
-
-      <label v-if="writableEnabledCalendarIds.length > 0" class="sidebar__setting">
-        <span>Default calendar</span>
-        <select v-model="defaultCalendarModel">
-          <option v-for="id in writableEnabledCalendarIds" :key="id" :value="id">
-            {{ calendarsStore.calendars.find((c) => c.id === id)?.displayName }}
-          </option>
-        </select>
-      </label>
-
       <button
         v-if="notificationsStore.permission === 'default'"
         type="button"
@@ -594,6 +569,14 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       <div class="sidebar__user">
         <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
         <span class="sidebar__username">{{ session.info?.username }}</span>
+        <button
+          type="button"
+          class="btn btn-ghost sidebar__settings-btn"
+          title="Settings"
+          @click="showSettingsDialog = true"
+        >
+          ⚙️
+        </button>
         <button class="btn btn-ghost sidebar__signout" @click="onLogout">Sign out</button>
       </div>
     </aside>
@@ -626,6 +609,8 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       @imported="onImported"
       @close="showImportDialog = false"
     />
+
+    <SettingsDialog v-if="showSettingsDialog" @close="showSettingsDialog = false" />
 
     <EventEditDialog
       v-if="editingEvent"
@@ -717,18 +702,6 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   font-size: 1.05rem;
   line-height: 1;
 }
-.sidebar__setting {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0 0.25rem;
-  font-size: 0.78rem;
-  color: var(--color-text-muted);
-}
-.sidebar__setting select {
-  padding: 0.35rem 0.5rem;
-  font-size: 0.85rem;
-}
 .sidebar__reminders-btn {
   font-size: 0.78rem;
   color: var(--color-text-faint);
@@ -770,9 +743,11 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   white-space: nowrap;
   color: var(--color-text-muted);
 }
+.sidebar__settings-btn,
 .sidebar__signout {
   padding: 0.3rem 0.5rem;
   font-size: 0.8rem;
+  flex-shrink: 0;
 }
 .main {
   flex: 1;

@@ -1305,3 +1305,33 @@ the same plan are not yet built.
     (preserving its own +2h offset on top of the series's +1h shift) with
     its custom title and color both intact, while every other occurrence
     picked up the new title and +1h time.
+
+## Calendar sort order + settings dialog
+
+Sidebar previously had no sort control at all -- calendars rendered in
+whatever order the CalDAV server's PROPFIND response enumerated them in
+(`CalendarStore.discoverCalendars`/tsdav's `fetchCalendars`); CalDAV itself
+has no standard ordering property to read instead, so there was nothing
+server-side worth preserving. Added a client-only sort setting:
+
+- `client/src/stores/settings.ts`: new `calendarSortOrder` (`'server' |
+  'name-asc' | 'name-desc'`), persisted to `localStorage` under
+  `calendar.sortOrder`, same load-at-init/set-and-persist pattern as the
+  existing `weekStart`/`defaultCalendarId` settings.
+- `client/src/components/CalendarList.vue`: applies the sort (via a local
+  `sorted()` helper) to the own/shared calendar lists independently, right
+  before rendering -- doesn't touch `store.calendars`' underlying order, so
+  anything else keying off that array (color overrides, the new-event
+  default-calendar picker, etc) is unaffected.
+- Manual drag-to-reorder was considered and explicitly deferred (would need
+  a new client dependency -- no drag/sort library exists in `client/` today;
+  FullCalendar's own `interactionPlugin` only covers grid event drag, not a
+  generic sortable list) -- picked the simpler dropdown-rule approach
+  instead.
+
+Also moved this setting, plus the pre-existing "Week starts on" and
+"Default calendar" selects, out of the always-visible sidebar and into a
+new `SettingsDialog.vue` (same overlay/dialog pattern as
+`RenameCalendarDialog.vue`), opened via a ⚙️ button next to sign-out. Keeps
+the sidebar from accumulating an ever-growing stack of loose `<select>`s as
+more settings get added.
