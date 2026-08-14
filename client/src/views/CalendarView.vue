@@ -848,6 +848,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 }
 .fc .fc-button:hover {
   background: var(--color-surface-hover);
+  color: var(--color-text);
 }
 .fc .fc-button:focus {
   box-shadow: 0 0 0 3px var(--color-primary-soft);
