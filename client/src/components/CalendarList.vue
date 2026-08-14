@@ -42,11 +42,13 @@ const newColor = ref('#0082c9')
 const creating = ref(false)
 const createError = ref<string | null>(null)
 
-function openNewForm(): void {
-  showNewForm.value = true
-  newName.value = ''
-  newColor.value = '#0082c9'
-  createError.value = null
+function toggleNewForm(): void {
+  showNewForm.value = !showNewForm.value
+  if (showNewForm.value) {
+    newName.value = ''
+    newColor.value = '#0082c9'
+    createError.value = null
+  }
 }
 
 function closeNewForm(): void {
@@ -72,19 +74,10 @@ async function submitNewCalendar(): Promise<void> {
   <div class="calendar-list">
     <PendingSharesList />
 
-    <h2 class="calendar-list__heading">Calendars</h2>
-    <ul>
-      <CalendarListItem
-        v-for="cal in ownCalendars"
-        :key="cal.id"
-        :cal="cal"
-        @share="onShareClick"
-        @rename="onRenameClick"
-      />
-      <li v-if="!store.loading && store.calendars.length === 0" class="calendar-list__empty">
-        No calendars found.
-      </li>
-    </ul>
+    <div class="calendar-list__header">
+      <h2 class="calendar-list__heading">Calendars</h2>
+      <button type="button" class="calendar-list__add-btn" title="New calendar" @click="toggleNewForm">+</button>
+    </div>
 
     <form
       v-if="showNewForm"
@@ -101,16 +94,26 @@ async function submitNewCalendar(): Promise<void> {
       />
       <div class="calendar-list__new-row">
         <input v-model="newColor" type="color" class="calendar-list__swatch" title="Color" />
+        <button type="button" class="btn btn-ghost" @click="closeNewForm">Cancel</button>
         <button type="submit" class="btn btn-primary" :disabled="creating || !newName.trim()">
           {{ creating ? 'Creating…' : 'Create' }}
         </button>
-        <button type="button" class="btn btn-ghost" @click="closeNewForm">Cancel</button>
       </div>
       <p v-if="createError" class="calendar-list__new-error">{{ createError }}</p>
     </form>
-    <button v-else type="button" class="btn btn-ghost calendar-list__new-btn" @click="openNewForm">
-      + New calendar
-    </button>
+
+    <ul>
+      <CalendarListItem
+        v-for="cal in ownCalendars"
+        :key="cal.id"
+        :cal="cal"
+        @share="onShareClick"
+        @rename="onRenameClick"
+      />
+      <li v-if="!store.loading && store.calendars.length === 0" class="calendar-list__empty">
+        No calendars found.
+      </li>
+    </ul>
 
     <template v-if="sharedCalendars.length > 0">
       <h2 class="calendar-list__heading calendar-list__heading--shared">Shared with me</h2>
@@ -136,16 +139,40 @@ async function submitNewCalendar(): Promise<void> {
 </template>
 
 <style scoped>
+.calendar-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
 .calendar-list__heading {
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-faint);
-  margin: 0 0 0.6rem;
+  margin: 0;
 }
 .calendar-list__heading--shared {
   margin-top: 0.9rem;
+}
+.calendar-list__add-btn {
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.calendar-list__add-btn:hover {
+  background: var(--color-surface-hover);
 }
 ul {
   list-style: none;
@@ -184,25 +211,21 @@ ul {
   border: none;
   border-radius: 50%;
 }
-.calendar-list__new-btn {
-  margin-top: 0.5rem;
-  width: 100%;
-  justify-content: flex-start;
-  font-size: 0.85rem;
-  color: var(--color-text-faint);
-}
 .calendar-list__new-form {
-  margin-top: 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  margin-bottom: 0.4rem;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
 }
 .calendar-list__new-input {
   width: 100%;
-  padding: 0.4rem 0.55rem;
+  padding: 0.35rem 0.5rem;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   background: var(--color-surface);
   color: inherit;
   box-sizing: border-box;
@@ -211,6 +234,10 @@ ul {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+.calendar-list__new-row .btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
 }
 .calendar-list__new-error {
   flex-basis: 100%;
