@@ -22,6 +22,27 @@ local user store or account system.
 See [AGENTS.md](./AGENTS.md) for implementation details, known gaps, and
 open items.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="screenshots/02-calendar-month.png" alt="Month view"></td>
+    <td><img src="screenshots/03-calendar-week.png" alt="Week view"></td>
+  </tr>
+  <tr>
+    <td align="center">Month view</td>
+    <td align="center">Week view</td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/04-new-event.png" alt="New event dialog"></td>
+    <td><img src="screenshots/05-settings.png" alt="Settings dialog"></td>
+  </tr>
+  <tr>
+    <td align="center">New event</td>
+    <td align="center">Settings</td>
+  </tr>
+</table>
+
 ## Stack
 
 npm workspaces monorepo:
