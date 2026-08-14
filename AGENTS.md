@@ -15,6 +15,45 @@ existing "Datum - Calendar" app on the App Store) — neither shipped beyond
 a rename pass, so there's no lingering "ownercal"/"datum" naming to clean
 up anywhere in the codebase.
 
+## Toolchain: TypeScript 7 vs. `@typescript-eslint` and `vue-tsc`
+
+`typescript` is pinned to `^7.0.2` (from dependabot PR #9, merged into
+`main`). Two separate parts of the toolchain don't support TS7 yet:
+
+**1. `@typescript-eslint/eslint-plugin`/`parser`** (latest stable: 8.67.0)
+declare a peer dep of `typescript@">=4.8.4 <6.1.0"`, so `npm ci` fails with
+`ERESOLVE` unless peer conflicts are bypassed. Tracked upstream:
+https://github.com/typescript-eslint/typescript-eslint/issues/10940 — blocked
+on ESLint lacking async-parser support plus real work to bridge the new
+Go/WASM (`tsgo`) AST and type info back into JS. Maintainers estimate
+"1-2 typescript-eslint major releases" out, no firm timeline.
+**Workaround:** CI (`.github/workflows/ci.yml`) runs
+`npm ci --legacy-peer-deps` rather than plain `npm ci`. This ignores the
+peer conflict rather than resolving it — treat lint output with a little
+suspicion on TS7-only syntax. (There's also currently no
+`.eslintrc`/`eslint.config.js` in the repo — `npm run lint` fails with
+"couldn't find eslint.config.js" — a separate, pre-existing gap.)
+
+**2. `vue-tsc`** (latest: 3.3.9, client's typecheck-during-build tool) crashes
+outright on TS7 with `ERR_PACKAGE_PATH_NOT_EXPORTED: Package subpath
+'./lib/tsc' is not defined by "exports"` — TS7 removed that subpath.
+Confirmed via reproduction locally, and via upstream:
+https://github.com/vuejs/language-tools/issues/6124 (closed as duplicate,
+no fix) and https://github.com/vuejs/language-tools/issues/5381 (tracks
+proper `tsgo` support — closed, unscheduled, no PR). This isn't a peer-dep
+nuisance like the lint one — it's a hard crash, so it actually broke the
+client production build (`vue-tsc -b && vite build`).
+**Workaround:** `client/package.json`'s `build` script no longer runs
+`vue-tsc -b` — it's just `vite build` now. The type-check step was moved to
+a separate `npm run typecheck -w client` script (not run by `build` or CI)
+so it's still there to run by hand once `vue-tsc` supports TS7, but it
+currently does NOT run automatically anywhere — client type errors won't be
+caught by `npm run build` or CI until this is revisited.
+
+**Revisit both when:** typescript-eslint (issue #10940) or vue-tsc/Volar
+(issues #6124 / #5381) ship TS7 support — then drop `--legacy-peer-deps` and
+put `vue-tsc -b` back in front of `vite build` in `client/package.json`.
+
 ## TODO (user-requested, not yet scoped)
 
 - **VTODO/task list UI.** Explicitly out of scope per the user — not to be
