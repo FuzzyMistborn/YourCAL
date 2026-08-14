@@ -11,20 +11,20 @@
   "dependencies": {
     "@yourcal/shared": "*",
     "@fastify/secure-session": "^8.1.1",
-    "@fastify/static": "^10.1.2",
+    "@fastify/static": "^10.1.3",
     "@touch4it/ical-timezones": "^1.9.0",
-    "better-sqlite3": "^13.0.1",
-    "fastify": "^5.1.0",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.11.2",
     "ical.js": "^2.1.0",
     "luxon": "^3.5.0",
     "tsdav": "^2.1.3",
     "xml-js": "1.6.11"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/luxon": "^3.4.2",
     "@types/node": "^26.1.2",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.11",
     "vitest": "^4.1.10"
   }
 }
