@@ -890,6 +890,44 @@ returns 200 after being created mid-session). Not independently
 re-verified in a browser by this session (no browser tool was available)
 -- diagnosed from server logs plus reading the store code.
 
+**Three more bugs found by code review (client never exercised in a
+browser, per the note above) and fixed in the same pass as the read-only
+calendar-picker gap documented under "Read-only calendar support"**:
+
+- `EventEditDialog.vue`'s `parseIcalUntil()` (recurrence end-date display)
+  used `.toLocal()` -- the browser's zone -- instead of the event's own
+  zone, unlike every other date field in that file (see the file's own
+  top-of-component comment on why that matters). A viewer in a different
+  timezone than an event with a recurring `UNTIL` could see the end date
+  silently off by a day, and re-saving without touching that field baked
+  the shift into the stored `UNTIL`. Fixed by threading `initialZone`
+  through `parseRepeat`/`parseIcalUntil` the same way `initialDate`/
+  `initialTime` already do.
+- No client-side handling of a session expiring mid-tab: `api.ts`'s
+  `request()` had no special case for a 401, so once the session TTL
+  (`SESSION_TTL_SECONDS`, default 24h) lapsed with the tab still open,
+  every subsequent save/delete/drag/resize just failed with a generic
+  "Failed to ..." banner and no indication the user needed to sign in
+  again -- easy to hit for a calendar app, which people leave open all
+  day. Fixed with a `SESSION_EXPIRED_EVENT` `window` event dispatched from
+  `request()` on any non-`/session` 401, handled in `App.vue` by clearing
+  the session store and routing to `/login?expired=1`; `LoginView.vue`
+  shows "Your session expired. Please sign in again." when that query
+  param is present.
+- `eventsStore.reloadLastRange()` (called after every create/update/delete)
+  always force-refetched *every* currently-enabled calendar's visible
+  range, not just the one calendar that actually changed -- editing one
+  event on one calendar re-fetched all of them, bypassing the 30s
+  freshness cache entirely, and getting more expensive as more calendars
+  are enabled. Fixed by giving `loadRange`'s `force` param an array form
+  (force only those ids; everything else still goes through the normal
+  freshness check) and having `reloadLastRange(calendarIds?)` pass through
+  the specific calendar(s) a given write actually touched -- both the
+  source and destination when `updateEvent` moves an event to a different
+  calendar. The 412-conflict and drag/resize-failure recovery paths still
+  call `reloadLastRange()` with no args (full refresh), since those are
+  rare error-recovery cases, not the common path.
+
 **Second, unrelated bug found via the user's actual browser console**:
 subscriptions' "Add" button appeared to do nothing, with no visible error.
 Root cause: `stores/subscriptions.ts`'s `add()` called `crypto.randomUUID()`
@@ -1091,6 +1129,17 @@ the same plan are not yet built.
   event-create request correctly 403'd). Client wiring: `Calendar.readOnly`
   now drives `EventDetailPopover`'s existing readOnly UI (previously only
   fed by the ICS-subscription case) and FullCalendar's per-event `editable`.
+  **Gap found and fixed in a later session**: none of this reached the
+  New Event / Edit Event dialog's own Calendar dropdown or the Import
+  dialog's Calendar dropdown — both rendered every calendar including
+  read-only ones, so a user could pick one, fill out a whole event (or a
+  whole .ics import), and only find out it was rejected after submit hit a
+  403, with the create dialog already closed and the typed content gone.
+  Fixed by filtering both dropdowns to writable calendars
+  (`EventEditDialog.vue`'s `writableCalendars`, `ImportDialog.vue`'s
+  `writableCalendars`), keeping the event's current calendar selectable
+  even if it's since become read-only so re-pointing it elsewhere still
+  works.
 - **Per-event color.** RFC 7986 `COLOR`, a plain string VEVENT property (no
   `ICAL.Recur.fromString`-style wrapping trap the way RRULE has).
   `EventFields.color`/`CalendarObject.color`, read/write in `mapper.ts`,

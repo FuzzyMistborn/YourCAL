@@ -33,7 +33,17 @@ export const useEventsStore = defineStore('events', () => {
   // still the most recently started call by the time it resolves.
   let loadSeq = 0
 
-  async function loadRange(calendarIds: string[], start: string, end: string, force = false): Promise<void> {
+  // `force` of `true` refetches every requested calendar unconditionally;
+  // an array of ids force-refetches only those (the rest still go through
+  // the normal freshness check) -- used after a single-calendar write so an
+  // edit doesn't pay for re-fetching every *other* enabled calendar's range
+  // too (see reloadLastRange).
+  async function loadRange(
+    calendarIds: string[],
+    start: string,
+    end: string,
+    force: boolean | string[] = false,
+  ): Promise<void> {
     const seq = ++loadSeq
     lastLoadedIds.value = calendarIds
     lastRange.value = { start, end }
@@ -42,12 +52,15 @@ export const useEventsStore = defineStore('events', () => {
     // e.g. flipping back to a month viewed moments ago -- rather than
     // re-requesting data we already have.
     const now = Date.now()
-    const idsToFetch = force
-      ? calendarIds
-      : calendarIds.filter((id) => {
-          const loadedAt = rangeLoadedAt.value[rangeKey(id, start, end)]
-          return loadedAt === undefined || now - loadedAt >= FRESH_MS
-        })
+    const forceIds = Array.isArray(force) ? new Set(force) : null
+    const idsToFetch =
+      force === true
+        ? calendarIds
+        : calendarIds.filter((id) => {
+            if (forceIds?.has(id)) return true
+            const loadedAt = rangeLoadedAt.value[rangeKey(id, start, end)]
+            return loadedAt === undefined || now - loadedAt >= FRESH_MS
+          })
     if (idsToFetch.length === 0) return
 
     loading.value = true
@@ -86,9 +99,13 @@ export const useEventsStore = defineStore('events', () => {
     }
   }
 
-  async function reloadLastRange(): Promise<void> {
+  // `calendarIds` names which calendar(s) actually changed and must be
+  // force-refetched; omit it (e.g. after a 412 conflict, where we don't
+  // know what else might be stale) to fall back to refetching everything
+  // currently visible, as before.
+  async function reloadLastRange(calendarIds?: string[]): Promise<void> {
     if (!lastRange.value) return
-    await loadRange(lastLoadedIds.value, lastRange.value.start, lastRange.value.end, true)
+    await loadRange(lastLoadedIds.value, lastRange.value.start, lastRange.value.end, calendarIds ?? true)
   }
 
   function eventsFor(calendarIds: string[], start: string, end: string): CalendarObject[] {
@@ -120,17 +137,22 @@ export const useEventsStore = defineStore('events', () => {
 
   async function createEvent(calendarId: string, fields: CreateEventInput): Promise<void> {
     await api.createEvent(calendarId, fields)
-    await reloadLastRange()
+    await reloadLastRange([calendarId])
   }
 
   async function updateEvent(calendarId: string, uid: string, input: UpdateEventInput): Promise<void> {
     await api.updateEvent(calendarId, uid, input)
-    await reloadLastRange()
+    // A move to a different calendar (the edit dialog's Calendar dropdown)
+    // means the event vanishes from `calendarId`'s range and appears in
+    // `input.calendarId`'s -- both need refetching, not just one.
+    const changed =
+      input.calendarId && input.calendarId !== calendarId ? [calendarId, input.calendarId] : [calendarId]
+    await reloadLastRange(changed)
   }
 
   async function deleteEvent(calendarId: string, uid: string, input: DeleteEventInput): Promise<void> {
     await api.deleteEvent(calendarId, uid, input)
-    await reloadLastRange()
+    await reloadLastRange([calendarId])
   }
 
   return { byRange, loading, loadRange, reloadLastRange, eventsFor, findEvent, createEvent, updateEvent, deleteEvent }

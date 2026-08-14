@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Calendar } from '@yourcal/shared'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { api, ApiRequestError } from '../api.js'
 
 const props = defineProps<{
@@ -9,6 +9,11 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ imported: []; close: [] }>()
+
+// A read-only calendar would 403 on every event in the file with no useful
+// error surfaced (see importIcs's partial-failure handling) -- don't offer
+// it as an import target at all.
+const writableCalendars = computed(() => props.calendars.filter((c) => !c.readOnly))
 
 const calendarId = ref(props.defaultCalendarId)
 const file = ref<File | null>(null)
@@ -48,7 +53,7 @@ async function onSubmit(): Promise<void> {
       <label class="field">
         <span>Calendar</span>
         <select v-model="calendarId">
-          <option v-for="cal in calendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
+          <option v-for="cal in writableCalendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
         </select>
       </label>
 
@@ -57,12 +62,15 @@ async function onSubmit(): Promise<void> {
         <input type="file" accept=".ics,text/calendar" required @change="onFileChange" />
       </label>
 
+      <p v-if="writableCalendars.length === 0" class="dialog__error">
+        No writable calendar is available -- enable or create one first.
+      </p>
       <p v-if="error" class="dialog__error">{{ error }}</p>
       <p v-if="resultText" class="dialog__success">{{ resultText }}</p>
 
       <div class="dialog__actions">
         <button type="button" class="btn btn-ghost" @click="emit('close')">Close</button>
-        <button type="submit" class="btn btn-primary" :disabled="!file || submitting">
+        <button type="submit" class="btn btn-primary" :disabled="!file || submitting || writableCalendars.length === 0">
           {{ submitting ? 'Importing…' : 'Import' }}
         </button>
       </div>

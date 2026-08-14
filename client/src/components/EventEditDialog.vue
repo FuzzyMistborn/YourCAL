@@ -109,9 +109,13 @@ interface ParsedRepeat {
   monthlyWeekday: WeekdayCode
 }
 
-function parseIcalUntil(until: string): string | null {
+// UNTIL is always stored as a UTC instant (or a bare date for all-day
+// series) -- like every other date field in this file, it must be read back
+// in the event's own zone, not the browser's, or it silently shifts by a
+// day for a viewer in a different zone (see initialDate/initialTime above).
+function parseIcalUntil(until: string, zone: string): string | null {
   const dt = until.length > 8 ? DateTime.fromFormat(until, "yyyyLLdd'T'HHmmss'Z'", { zone: 'utc' }) : DateTime.fromFormat(until, 'yyyyLLdd')
-  return dt.isValid ? dt.toLocal().toFormat('yyyy-LL-dd') : null
+  return dt.isValid ? dt.setZone(zone).toFormat('yyyy-LL-dd') : null
 }
 
 // Recognizes FREQ + optional INTERVAL/COUNT/UNTIL/BYDAY. BYDAY means
@@ -126,6 +130,7 @@ function parseRepeat(
   fallbackUntil: string,
   defaultWeekday: WeekdayCode,
   defaultMonthlyOrdinal: number,
+  zone: string,
 ): ParsedRepeat {
   const fallback: ParsedRepeat = {
     repeat: 'none',
@@ -182,7 +187,7 @@ function parseRepeat(
     return { ...base, end: 'count', count: parseInt(parts.COUNT, 10), until: fallbackUntil }
   }
   if (parts.UNTIL) {
-    const until = parseIcalUntil(parts.UNTIL)
+    const until = parseIcalUntil(parts.UNTIL, zone)
     return until ? { ...base, end: 'until', count: 1, until } : { ...fallback, repeat: 'custom' }
   }
   return { ...base, end: 'never', count: 1, until: fallbackUntil }
@@ -229,7 +234,7 @@ const defaultWeekday = ISO_WEEKDAY_TO_CODE[startDt.weekday - 1]
 // Aug 11 2026 is the 2nd Tuesday, so that's the default if the user
 // switches to "on the Nth weekday" mode without picking an ordinal.
 const defaultMonthlyOrdinal = Math.ceil(startDt.day / 7)
-const parsedRepeat = parseRepeat(props.event?.rrule ?? null, defaultUntil, defaultWeekday, defaultMonthlyOrdinal)
+const parsedRepeat = parseRepeat(props.event?.rrule ?? null, defaultUntil, defaultWeekday, defaultMonthlyOrdinal, initialZone)
 
 const form = reactive({
   calendarId: props.event?.calendarId ?? props.defaultCalendarId,
@@ -451,6 +456,15 @@ const titleInput = ref<HTMLInputElement | null>(null)
 onMounted(() => {
   titleInput.value?.focus()
 })
+
+// Only offer calendars the event could actually be saved to -- a read-only
+// calendar would otherwise be pickable here, silently 403ing on submit
+// (see requireWritableCalendar server-side). Always keep the event's
+// current calendar in the list even if it's since become read-only, so
+// switching it away is still possible without losing the selection.
+const writableCalendars = computed(() =>
+  props.calendars.filter((c) => !c.readOnly || c.id === props.event?.calendarId),
+)
 </script>
 
 <template>
@@ -462,7 +476,7 @@ onMounted(() => {
         <label class="field">
           <span>Calendar</span>
           <select v-model="form.calendarId">
-            <option v-for="cal in calendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
+            <option v-for="cal in writableCalendars" :key="cal.id" :value="cal.id">{{ cal.displayName }}</option>
           </select>
         </label>
         <label class="field field--color">

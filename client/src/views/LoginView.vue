@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ApiRequestError } from '../api.js'
 import { useSessionStore } from '../stores/session.js'
 
 const session = useSessionStore()
 const router = useRouter()
+const route = useRoute()
 
 const LAST_SERVER_URL_KEY = 'calendar.lastServerUrl'
 
 const serverUrl = ref(localStorage.getItem(LAST_SERVER_URL_KEY) ?? '')
 const username = ref('')
 const password = ref('')
-const error = ref<string | null>(null)
+// Set by App.vue's session-expired handler (?expired=1) when a request
+// mid-session came back 401 -- distinct from a plain first-visit login
+// screen, so the user knows *why* they landed here.
+const error = ref<string | null>(route.query.expired ? 'Your session expired. Please sign in again.' : null)
 const submitting = ref(false)
 
 function hasScheme(url: string): boolean {

@@ -1,0 +1,100 @@
+import type { EventFields } from '@yourcal/shared'
+import { describe, expect, it } from 'vitest'
+import { calendarObjectToIcs, icsToCalendarObject } from './mapper.js'
+
+function baseFields(overrides: Partial<EventFields> = {}): EventFields {
+  return {
+    summary: 'Standup',
+    description: null,
+    location: null,
+    start: '2026-03-10T15:00:00.000Z',
+    end: '2026-03-10T15:30:00.000Z',
+    allDay: false,
+    timezone: null,
+    rrule: null,
+    color: null,
+    alarms: [],
+    rdate: [],
+    ...overrides,
+  }
+}
+
+function roundTrip(fields: EventFields) {
+  const ics = calendarObjectToIcs('test-uid', fields)
+  return icsToCalendarObject(ics, 'cal1', 'events/test-uid.ics', '"etag1"')
+}
+
+describe('mapper round-trip', () => {
+  it('preserves a plain timed event', () => {
+    const fields = baseFields({ summary: 'Standup', description: 'Daily sync', location: 'Room A' })
+    const obj = roundTrip(fields)
+    expect(obj.summary).toBe('Standup')
+    expect(obj.description).toBe('Daily sync')
+    expect(obj.location).toBe('Room A')
+    expect(obj.allDay).toBe(false)
+    expect(new Date(obj.start).toISOString()).toBe(fields.start)
+    expect(new Date(obj.end).toISOString()).toBe(fields.end)
+  })
+
+  it('preserves an all-day event across its exact calendar date', () => {
+    const fields = baseFields({
+      allDay: true,
+      start: '2026-03-10T00:00:00.000Z',
+      end: '2026-03-11T00:00:00.000Z',
+    })
+    const obj = roundTrip(fields)
+    expect(obj.allDay).toBe(true)
+    expect(obj.start.slice(0, 10)).toBe('2026-03-10')
+    expect(obj.end.slice(0, 10)).toBe('2026-03-11')
+  })
+
+  it('preserves an IANA timezone', () => {
+    const fields = baseFields({ timezone: 'America/New_York' })
+    const obj = roundTrip(fields)
+    expect(obj.timezone).toBe('America/New_York')
+  })
+
+  it('preserves an RRULE', () => {
+    const fields = baseFields({ rrule: 'FREQ=WEEKLY;COUNT=6' })
+    const obj = roundTrip(fields)
+    expect(obj.isRecurring).toBe(true)
+    expect(obj.rrule).toContain('FREQ=WEEKLY')
+    expect(obj.rrule).toContain('COUNT=6')
+  })
+
+  it('preserves alarms (VALARM round-trip)', () => {
+    const fields = baseFields({ alarms: [{ minutesBefore: 15 }, { minutesBefore: 60 }] })
+    const obj = roundTrip(fields)
+    expect(obj.alarms).toHaveLength(2)
+    expect(obj.alarms.map((a) => a.minutesBefore).sort((a, b) => a - b)).toEqual([15, 60])
+  })
+
+  it('preserves RDATEs for a timed event', () => {
+    const fields = baseFields({
+      rrule: 'FREQ=WEEKLY;COUNT=3',
+      rdate: ['2026-04-01T15:00:00.000Z'],
+    })
+    const obj = roundTrip(fields)
+    expect(obj.rdate).toHaveLength(1)
+    expect(new Date(obj.rdate[0]).toISOString()).toBe('2026-04-01T15:00:00.000Z')
+  })
+
+  it('preserves RDATEs for an all-day event', () => {
+    const fields = baseFields({
+      allDay: true,
+      start: '2026-03-10T00:00:00.000Z',
+      end: '2026-03-11T00:00:00.000Z',
+      rrule: 'FREQ=WEEKLY;COUNT=3',
+      rdate: ['2026-04-01'],
+    })
+    const obj = roundTrip(fields)
+    expect(obj.rdate).toHaveLength(1)
+    expect(obj.rdate[0].slice(0, 10)).toBe('2026-04-01')
+  })
+
+  it('preserves color', () => {
+    const fields = baseFields({ color: '#ff0000' })
+    const obj = roundTrip(fields)
+    expect(obj.color).toBe('#ff0000')
+  })
+})

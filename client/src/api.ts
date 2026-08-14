@@ -26,6 +26,16 @@ export class ApiRequestError extends Error {
   }
 }
 
+// Fired whenever a request 401s outside of the login/whoami calls
+// themselves -- the app is a single-view SPA (see router.ts), so nothing
+// else re-checks auth once the initial route guard has passed, and a
+// session that expires mid-tab (default 24h, see SESSION_TTL_SECONDS)
+// would otherwise just fail every subsequent save/delete/drag with a
+// generic error and no indication the user needs to sign in again.
+// main.ts/App.vue owns the actual redirect so this module doesn't need to
+// import the router.
+export const SESSION_EXPIRED_EVENT = 'yourcal:session-expired'
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -41,6 +51,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = (await res.json().catch(() => ({ error: 'unknown', message: res.statusText }))) as ApiError
+    // Exclude /session itself -- a 401 there is either "not logged in yet"
+    // (the router's own initial whoami check) or "wrong password" (the
+    // login form), neither of which should bounce back to /login.
+    if (res.status === 401 && path !== '/session') {
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT))
+    }
     throw new ApiRequestError(res.status, body)
   }
 
