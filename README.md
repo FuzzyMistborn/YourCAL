@@ -67,6 +67,16 @@ The app listens on `http://localhost:3000`. Log in with credentials for
 any CalDAV server reachable from the container (set `ALLOWED_CALDAV_HOSTS`
 to restrict which hosts it's allowed to connect to).
 
+**Logged out immediately after a successful login?** The session cookie is
+marked `Secure` whenever `NODE_ENV=production` (the Dockerfile's default),
+so browsers silently drop it if you're accessing the app over plain HTTP at
+anything other than `localhost` (e.g. a LAN IP like `http://192.168.1.50:3000`)
+— login itself succeeds (`POST /api/session` returns 201) but every request
+right after comes back 401 since the cookie never made it back. Either put a
+TLS-terminating reverse proxy in front and access over HTTPS, or, for a
+trusted LAN, uncomment `NODE_ENV: development` in `docker-compose.yml` and
+`docker compose up -d` again (no rebuild needed).
+
 ## Running locally for development
 
 Requires Node.js and a running CalDAV server to point at.
