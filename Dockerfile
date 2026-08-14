@@ -21,7 +21,10 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY shared/package.json shared/package.json
 COPY server/package.json server/package.json
 COPY client/package.json client/package.json
-RUN npm ci
+# --legacy-peer-deps: typescript-eslint doesn't support TypeScript 7 yet
+# (peer dep caps at <6.1.0). See AGENTS.md "Toolchain: TypeScript 7 vs.
+# @typescript-eslint" for details.
+RUN npm ci --legacy-peer-deps
 
 COPY shared shared
 COPY server server
