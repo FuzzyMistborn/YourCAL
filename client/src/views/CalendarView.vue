@@ -568,7 +568,14 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 
       <div class="sidebar__user">
         <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
-        <span class="sidebar__username">{{ session.info?.username }}</span>
+        <button
+          type="button"
+          class="btn btn-ghost sidebar__username"
+          title="Settings"
+          @click="showSettingsDialog = true"
+        >
+          {{ session.info?.username }}
+        </button>
         <button
           type="button"
           class="btn btn-ghost sidebar__settings-btn"
@@ -738,9 +745,13 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 }
 .sidebar__username {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  justify-content: flex-start;
+  padding: 0.3rem 0.35rem;
+  font-size: 0.85rem;
   color: var(--color-text-muted);
 }
 .sidebar__settings-btn,
