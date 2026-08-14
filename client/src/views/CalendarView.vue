@@ -567,24 +567,26 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       </p>
 
       <div class="sidebar__user">
-        <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
         <button
           type="button"
-          class="btn btn-ghost sidebar__username"
+          class="btn btn-ghost sidebar__username-row"
           title="Settings"
           @click="showSettingsDialog = true"
         >
-          {{ session.info?.username }}
+          <span class="sidebar__avatar">{{ (session.info?.username ?? '?').slice(0, 1).toUpperCase() }}</span>
+          <span class="sidebar__username">{{ session.info?.username }}</span>
         </button>
-        <button
-          type="button"
-          class="btn btn-ghost sidebar__settings-btn"
-          title="Settings"
-          @click="showSettingsDialog = true"
-        >
-          <span aria-hidden="true">⚙️</span> Settings
-        </button>
-        <button class="btn btn-ghost sidebar__signout" @click="onLogout">Sign out</button>
+        <div class="sidebar__user-actions">
+          <button
+            type="button"
+            class="btn btn-ghost sidebar__settings-btn"
+            title="Settings"
+            @click="showSettingsDialog = true"
+          >
+            <span aria-hidden="true">⚙️</span> Settings
+          </button>
+          <button class="btn btn-ghost sidebar__signout" @click="onLogout">Sign out</button>
+        </div>
       </div>
     </aside>
     <main class="main">
@@ -724,11 +726,19 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 .sidebar__user {
   margin-top: auto;
   display: flex;
-  align-items: center;
-  gap: 0.55rem;
+  flex-direction: column;
+  gap: 0.35rem;
   padding: 0.6rem 0.25rem 0;
   border-top: 1px solid var(--color-border);
   font-size: 0.85rem;
+}
+.sidebar__username-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 0.3rem 0.35rem;
 }
 .sidebar__avatar {
   width: 1.6rem;
@@ -745,14 +755,16 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 }
 .sidebar__username {
   min-width: 0;
-  max-width: 8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  justify-content: flex-start;
-  padding: 0.3rem 0.35rem;
   font-size: 0.85rem;
   color: var(--color-text-muted);
+}
+.sidebar__user-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .sidebar__settings-btn {
   padding: 0.3rem 0.5rem;
