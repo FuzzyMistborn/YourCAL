@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "@yourcal/shared": "*",
-    "@fullcalendar/core": "^7.0.2",
+    "@fullcalendar/core": "^6.1.21",
     "@fullcalendar/daygrid": "^6.1.15",
     "@fullcalendar/interaction": "^6.1.15",
     "@fullcalendar/timegrid": "^6.1.15",
-    "@fullcalendar/vue3": "^7.0.2",
+    "@fullcalendar/vue3": "^6.1.21",
     "luxon": "^3.5.0",
     "pinia": "^4.0.2",
     "vue": "^3.5.41",

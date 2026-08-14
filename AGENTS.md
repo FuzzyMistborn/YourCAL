@@ -54,6 +54,35 @@ caught by `npm run build` or CI until this is revisited.
 (issues #6124 / #5381) ship TS7 support — then drop `--legacy-peer-deps` and
 put `vue-tsc -b` back in front of `vite build` in `client/package.json`.
 
+## Toolchain: `@fullcalendar/*` v7 isn't fully released yet — reverted to v6.1.21
+
+Dependabot PR #9 also bumped `@fullcalendar/core` and `@fullcalendar/vue3` to
+`7.0.2` (stable), but left `@fullcalendar/daygrid`/`interaction`/`timegrid`
+pinned at `^6.1.15` (their `package.json` in `client/` wasn't touched by that
+PR). FullCalendar requires every `@fullcalendar/*` package in use to share
+the same major version. Checking npm, `daygrid`/`interaction`/`timegrid` have
+**no stable v7 release at all** — only `7.0.0-rc.0` — so a matched v7 set
+isn't actually available yet, unlike `core`/`vue3` which jumped ahead to
+`7.0.2` stable. Mixing them (`core@7` + `daygrid@6`) broke module resolution
+at build time (`vite`/`rolldown` failing to resolve
+`@fullcalendar/core/index.js` from `daygrid`, or an `exports` map mismatch on
+`./internal`, depending on how npm happened to hoist/nest the two `core`
+copies — non-deterministic-looking, but really just downstream of the same
+underlying skew).
+
+**Fix:** reverted `@fullcalendar/core` and `@fullcalendar/vue3` back to
+`^6.1.21` in `client/package.json` so the whole family matches on a stable,
+fully-released version again. Also had to delete and regenerate
+`package-lock.json` from scratch — `npm install` alone left a stale nested
+`client/node_modules/@fullcalendar/core` resolved to `7.0.2` in the lockfile
+even after the `package.json` range changed, so a plain reinstall wasn't
+enough to actually pick up the reverted version.
+
+**Revisit when:** `@fullcalendar/daygrid`, `interaction`, and `timegrid` all
+publish a stable (non-`-rc`/`-beta`) v7 release — then bump all five
+`@fullcalendar/*` packages to matching v7 versions together, not just
+`core`/`vue3`.
+
 ## TODO (user-requested, not yet scoped)
 
 - **VTODO/task list UI.** Explicitly out of scope per the user — not to be
