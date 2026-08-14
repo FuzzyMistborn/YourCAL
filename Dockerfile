@@ -34,7 +34,7 @@ RUN npm run build
 # Drop devDependencies (typescript, vite, vitest, tsx, ...) -- keeps
 # better-sqlite3's already-compiled native binary, since prune only
 # removes package entries, not rebuild anything.
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev --legacy-peer-deps
 
 FROM node:26-bookworm-slim AS runtime
 WORKDIR /app
