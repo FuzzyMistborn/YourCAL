@@ -582,7 +582,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
           title="Settings"
           @click="showSettingsDialog = true"
         >
-          ⚙️
+          <span aria-hidden="true">⚙️</span> Settings
         </button>
         <button class="btn btn-ghost sidebar__signout" @click="onLogout">Sign out</button>
       </div>
@@ -744,8 +744,8 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   font-size: 0.75rem;
 }
 .sidebar__username {
-  flex: 1;
   min-width: 0;
+  max-width: 8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -754,11 +754,16 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   font-size: 0.85rem;
   color: var(--color-text-muted);
 }
-.sidebar__settings-btn,
+.sidebar__settings-btn {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
 .sidebar__signout {
   padding: 0.3rem 0.5rem;
   font-size: 0.8rem;
   flex-shrink: 0;
+  margin-left: auto;
 }
 .main {
   flex: 1;
