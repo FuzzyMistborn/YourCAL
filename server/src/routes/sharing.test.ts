@@ -40,7 +40,7 @@ function calendar(overrides: Partial<Calendar> = {}): Calendar {
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify()
-  app.decorateRequest('session', null as unknown as { get: () => unknown })
+  app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     req.session = { get: (key: string) => (key === 'dav' ? dav : undefined) } as never
   })

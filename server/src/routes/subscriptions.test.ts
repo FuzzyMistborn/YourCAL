@@ -17,7 +17,7 @@ const dav: DavContext = { baseUrl: 'https://caldav.example.com/dav/', username: 
 async function buildApp(opts: { authenticated?: boolean } = {}): Promise<FastifyInstance> {
   const { authenticated = true } = opts
   const app = Fastify()
-  app.decorateRequest('session', null as unknown as { get: () => unknown })
+  app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     req.session = { get: (key: string) => (key === 'dav' && authenticated ? dav : undefined) } as never
   })

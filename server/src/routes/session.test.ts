@@ -27,7 +27,7 @@ async function buildApp(
   const sets: unknown[] = []
   const deletes = { count: 0 } // object, not a primitive -- mutated by the hook below, read by the test after inject()
   const app = Fastify()
-  app.decorateRequest('session', null as unknown as { get: () => unknown; set: () => void; delete: () => void })
+  app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     req.session = {
       get: (key: string) => (key === 'dav' && authenticated ? dav : undefined),

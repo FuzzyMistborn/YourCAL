@@ -1,4 +1,12 @@
-import type { Calendar, CalendarObject, CreateCalendarInput, SyncResult, TimeRange, UpdateCalendarInput } from '@yourcal/shared'
+import type {
+  Calendar,
+  CalendarObject,
+  CreateCalendarInput,
+  SyncResult,
+  TimeRange,
+  UnsubscribeResult,
+  UpdateCalendarInput,
+} from '@yourcal/shared'
 import Database from 'better-sqlite3'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { DavContext } from '../dav/context.js'
@@ -92,9 +100,9 @@ class FakeDavStore implements CalendarStore {
   async deleteCalendar(_ctx: DavContext, calendarId: string): Promise<void> {
     this.calendars = this.calendars.filter((c) => c.id !== calendarId)
   }
-  async unsubscribeCalendar(_ctx: DavContext, calendarId: string) {
+  async unsubscribeCalendar(_ctx: DavContext, calendarId: string): Promise<UnsubscribeResult> {
     this.calendars = this.calendars.filter((c) => c.id !== calendarId)
-    return { unsubscribed: true }
+    return { dismissedPending: null }
   }
 }
 
