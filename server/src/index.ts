@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   // this app's base64url-encoded calendar ids -- Radicale's shorter URLs
   // stayed under it by luck, but Baikal's longer `/dav.php/calendars/...`
   // paths exceed it, producing a 414 on every route with a real calendar id.
-  const app = Fastify({ logger: true, maxParamLength: 500 })
+  const app = Fastify({ logger: true, routerOptions: { maxParamLength: 500 } })
 
   // A calendarId/href resolving to a different host than the authenticated
   // CalDAV server is a rejected SSRF attempt, not a server bug -- surface it
