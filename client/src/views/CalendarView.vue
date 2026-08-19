@@ -4,6 +4,8 @@ import dayGridPlugin from '@fullcalendar/daygrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import type { EventResizeDoneArg } from '@fullcalendar/interaction'
 import FullCalendar from '@fullcalendar/vue3'
+import listPlugin from '@fullcalendar/list'
+
 import timeGridPlugin from '@fullcalendar/timegrid'
 import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
@@ -410,13 +412,15 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 }
 
 const calendarOptions = computed<CalendarOptions>(() => ({
-  plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
+
+  plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin],
   initialView: 'dayGridMonth',
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
-    right: 'dayGridMonth,timeGridWeek,timeGridDay',
+    right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
   },
+
   height: '100%',
   expandRows: true,
   dayMaxEventRows: true,
