@@ -585,13 +585,18 @@ stop it accumulating loose `<select>`s.
 
 Client-only, all in `CalendarView.vue` plus one new component.
 
-- **Agenda** (`listMonth`, button "Agenda") and **Year** (`multiMonthYear`,
-  button "Year") are just added FullCalendar plugins —
+- **Agenda** (custom `listUpcoming` view, button "Agenda") and **Year**
+  (`multiMonthYear`, button "Year") use FullCalendar plugins —
   `@fullcalendar/list` + `@fullcalendar/multimonth`, both pinned at
   `6.1.21` to match the rest of the `@fullcalendar/*` family (see the pin
   note above). Added to `plugins`, the `headerToolbar` right group, and
-  `buttonText`. `noEventsText` set for the empty agenda case. The events
-  array already suited both; no data changes.
+  `buttonText`/`views`. `noEventsText` set for the empty agenda case.
+- `listUpcoming` is a `type: 'list'` view whose `visibleRange` always
+  starts today and runs a year out, regardless of prev/next navigation.
+  `onDatesSet` records the view type in `currentViewType`; while it's
+  `listUpcoming`, `fullCalendarEvents` sorts by start and caps the list at
+  `LIST_UPCOMING_MAX_EVENTS` (100) so a busy year stays bounded. (Replaced
+  the earlier `listMonth` agenda; came from the YourCAL fork.)
 - **Mini-month** — `client/src/components/MiniMonth.vue`, standalone,
   luxon-only (no second FullCalendar instance). Props: `firstDay`
   (0=Sun..6=Sat, from settings) and `focusDate` (ISO). It follows the main

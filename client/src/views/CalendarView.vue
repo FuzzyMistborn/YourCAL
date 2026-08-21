@@ -36,6 +36,18 @@ import { useSubscriptionsStore } from '../stores/subscriptions.js'
 import { useUndoStore } from '../stores/undo.js'
 import { useClipboardStore } from '../stores/clipboard.js'
 
+const listUpcomingView = {
+  type: 'list',
+  buttonText: 'Agenda',
+  visibleRange: () => {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const end = new Date(start)
+    end.setFullYear(end.getFullYear() + 1)
+    return { start, end }
+  },
+}
+
 const session = useSessionStore()
 const calendarsStore = useCalendarsStore()
 const eventsStore = useEventsStore()
@@ -46,6 +58,8 @@ const undoStore = useUndoStore()
 const clipboardStore = useClipboardStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
+const currentViewType = ref<string | null>(null)
+const LIST_UPCOMING_MAX_EVENTS = 100
 const errorBanner = ref<string | null>(null)
 
 // The browser prints FullCalendar's own table markup badly (missing grid
@@ -162,8 +176,13 @@ watch(
   },
 )
 
+const listUpcomingEvents = computed(() => {
+  return [...rawVisibleEvents.value].sort((a, b) => a.start.localeCompare(b.start)).slice(0, LIST_UPCOMING_MAX_EVENTS)
+})
+
 const fullCalendarEvents = computed(() => {
-  return rawVisibleEvents.value.map((e) => ({
+  const events = currentViewType.value === 'listUpcoming' ? listUpcomingEvents.value : rawVisibleEvents.value
+  return events.map((e) => ({
     id: `${e.calendarId}:${e.uid}:${e.recurrenceId ?? ''}`,
     title: e.summary,
     // All-day instants are UTC-midnight-anchored calendar dates (see
@@ -204,6 +223,7 @@ async function loadVisibleRange(): Promise<void> {
 const calendarDate = ref<string | null>(null)
 
 function onDatesSet(arg: DatesSetArg): void {
+  currentViewType.value = arg.view.type
   visibleRange.value = { start: arg.start.toISOString(), end: arg.end.toISOString() }
   calendarDate.value = arg.view.currentStart.toISOString()
   printContext.value = {
@@ -721,13 +741,15 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 const calendarOptions = computed<CalendarOptions>(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin, multiMonthPlugin],
   initialView: 'dayGridMonth',
+  views: {
+    listUpcoming: listUpcomingView,
+  },
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
-    right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
+    right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listUpcoming',
   },
   buttonText: {
-    listMonth: 'Agenda',
     multiMonthYear: 'Year',
   },
   // The agenda view has nothing to show for an empty range -- spell that
