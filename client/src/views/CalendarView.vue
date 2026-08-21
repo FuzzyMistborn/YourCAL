@@ -927,9 +927,6 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       >
         🔔 Enable reminder notifications
       </button>
-      <p v-else-if="notificationsStore.permission === 'granted'" class="sidebar__reminders-note">
-        🔔 Reminders on — only while this tab is open
-      </p>
       <p v-else-if="notificationsStore.permission === 'denied'" class="sidebar__reminders-note">
         🔕 Reminder notifications blocked (check browser settings)
       </p>
