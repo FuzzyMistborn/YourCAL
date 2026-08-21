@@ -4,6 +4,7 @@ import { useCalendarsStore } from '../stores/calendars.js'
 import {
   useSettingsStore,
   type CalendarSortOrder,
+  type CalendarViewType,
   type DefaultCalendarMode,
   type TimeFormat,
   type WeekStart,
@@ -27,6 +28,11 @@ const calendarSortOrderModel = computed<CalendarSortOrder>({
 const timeFormatModel = computed<TimeFormat>({
   get: () => settingsStore.timeFormat,
   set: (value) => settingsStore.setTimeFormat(value),
+})
+
+const defaultViewModel = computed<CalendarViewType>({
+  get: () => settingsStore.defaultView,
+  set: (value) => settingsStore.setDefaultView(value),
 })
 
 // Same "writable + currently enabled" restriction CalendarView applies when
@@ -78,6 +84,17 @@ function toggleDefaultVisible(id: string): void {
         <select v-model="weekStartModel">
           <option value="sunday">Sunday</option>
           <option value="monday">Monday</option>
+        </select>
+      </label>
+
+      <label class="dialog__field dialog__field--row">
+        <span>Default view</span>
+        <select v-model="defaultViewModel">
+          <option value="multiMonthYear">Year</option>
+          <option value="dayGridMonth">Month</option>
+          <option value="timeGridWeek">Week</option>
+          <option value="timeGridDay">Day</option>
+          <option value="listUpcoming">Agenda</option>
         </select>
       </label>
 

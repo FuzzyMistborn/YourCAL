@@ -740,7 +740,7 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 
 const calendarOptions = computed<CalendarOptions>(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin, multiMonthPlugin],
-  initialView: 'dayGridMonth',
+  initialView: settingsStore.defaultView,
   views: {
     listUpcoming: listUpcomingView,
   },
