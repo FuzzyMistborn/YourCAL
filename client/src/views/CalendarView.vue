@@ -28,6 +28,18 @@ import { useSessionStore } from '../stores/session.js'
 import { useSettingsStore } from '../stores/settings.js'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
 
+const listUpcomingView = {
+  type: 'list',
+  buttonText: 'List',
+  visibleRange: () => {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const end = new Date(start)
+    end.setFullYear(end.getFullYear() + 1)
+    return { start, end }
+  },
+}
+
 const session = useSessionStore()
 const calendarsStore = useCalendarsStore()
 const eventsStore = useEventsStore()
@@ -36,6 +48,8 @@ const settingsStore = useSettingsStore()
 const subscriptionsStore = useSubscriptionsStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
+const currentViewType = ref<string | null>(null)
+const LIST_UPCOMING_MAX_EVENTS = 100
 const errorBanner = ref<string | null>(null)
 
 const enabledCalendarIds = computed(() =>
@@ -97,8 +111,13 @@ watch(
   },
 )
 
+const listUpcomingEvents = computed(() => {
+  return [...rawVisibleEvents.value].sort((a, b) => a.start.localeCompare(b.start)).slice(0, LIST_UPCOMING_MAX_EVENTS)
+})
+
 const fullCalendarEvents = computed(() => {
-  return rawVisibleEvents.value.map((e) => ({
+  const events = currentViewType.value === 'listUpcoming' ? listUpcomingEvents.value : rawVisibleEvents.value
+  return events.map((e) => ({
     id: `${e.calendarId}:${e.uid}:${e.recurrenceId ?? ''}`,
     title: e.summary,
     // All-day instants are UTC-midnight-anchored calendar dates (see
@@ -134,6 +153,7 @@ async function loadVisibleRange(): Promise<void> {
 }
 
 function onDatesSet(arg: DatesSetArg): void {
+  currentViewType.value = arg.view.type
   visibleRange.value = { start: arg.start.toISOString(), end: arg.end.toISOString() }
   void loadVisibleRange()
 }
@@ -415,10 +435,13 @@ const calendarOptions = computed<CalendarOptions>(() => ({
 
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin],
   initialView: 'dayGridMonth',
+  views: {
+    listUpcoming: listUpcomingView,
+  },
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
-    right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+    right: 'dayGridMonth,timeGridWeek,timeGridDay,listUpcoming',
   },
 
   height: '100%',
