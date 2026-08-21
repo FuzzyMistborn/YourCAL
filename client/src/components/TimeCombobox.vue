@@ -45,6 +45,12 @@ const optionEls = ref<Record<string, HTMLElement | null>>({})
 const open = ref(false)
 const query = ref(labelFor(props.modelValue))
 const highlighted = ref(-1)
+// Query starts each open already populated with the current value's label
+// (so it's visible/selectable), but that same text must not filter the
+// list down to just itself -- only text the user actually types should
+// narrow the options. Cleared whenever the list opens, set once real
+// keyboard input happens.
+const hasEdited = ref(false)
 const listStyle = ref({ top: '0px', left: '0px', width: '0px' })
 
 // The dropdown is teleported to <body> and positioned with fixed
@@ -78,6 +84,7 @@ watch(query, () => {
 })
 
 const filteredOptions = computed<Option[]>(() => {
+  if (!hasEdited.value) return OPTIONS
   const normalized = query.value.toLowerCase().replace(/[^a-z0-9]/g, '')
   if (!normalized) return OPTIONS.value
   const matches = OPTIONS.value.filter((o) => o.searchKey.includes(normalized))
@@ -88,6 +95,7 @@ function openList(): void {
   if (open.value) return
   open.value = true
   highlighted.value = -1
+  hasEdited.value = false
   updateListPosition()
   nextTick(() => {
     const current = optionEls.value[props.modelValue]
@@ -192,6 +200,7 @@ onBeforeUnmount(() => {
       type="text"
       autocomplete="off"
       class="combobox__input"
+      @input="hasEdited = true"
       @focus="onFocus"
       @keydown.down.prevent="onArrow(1)"
       @keydown.up.prevent="onArrow(-1)"
