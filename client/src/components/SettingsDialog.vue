@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useCalendarsStore } from '../stores/calendars.js'
-import { useSettingsStore, type CalendarSortOrder, type WeekStart } from '../stores/settings.js'
+import {
+  useSettingsStore,
+  type CalendarSortOrder,
+  type DefaultCalendarMode,
+  type WeekStart,
+} from '../stores/settings.js'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -35,6 +40,11 @@ const defaultCalendarModel = computed<string>({
   get: () => preferredDefaultCalendarId.value,
   set: (value) => settingsStore.setDefaultCalendarId(value),
 })
+
+const defaultCalendarModeModel = computed<DefaultCalendarMode>({
+  get: () => settingsStore.defaultCalendarMode,
+  set: (value) => settingsStore.setDefaultCalendarMode(value),
+})
 </script>
 
 <template>
@@ -65,6 +75,14 @@ const defaultCalendarModel = computed<string>({
           <option v-for="id in writableEnabledCalendarIds" :key="id" :value="id">
             {{ calendarsStore.calendars.find((c) => c.id === id)?.displayName }}
           </option>
+        </select>
+      </label>
+
+      <label v-if="writableEnabledCalendarIds.length > 0" class="dialog__field dialog__field--row">
+        <span>New events use</span>
+        <select v-model="defaultCalendarModeModel">
+          <option value="fixed">Default calendar</option>
+          <option value="last-used">Last used calendar</option>
         </select>
       </label>
 
