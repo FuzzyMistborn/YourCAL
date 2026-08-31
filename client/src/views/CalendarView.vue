@@ -60,13 +60,33 @@ async function printCalendar(): Promise<void> {
   // A rAF after nextTick gives FullCalendar's own post-option-change
   // reflow a frame to settle before the (synchronous, blocking) print.
   await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+  measurePrintCellHeight()
   window.print()
+}
+
+// Per-week-row cell height for print, sized so the grid fills one landscape
+// page without spilling onto a second. A fixed min-height can't do this: a
+// 6-row month needs shorter rows than a 4-row one. Recomputed from the real
+// row count FullCalendar rendered, just before the print dialog opens.
+const printCellHeight = ref('2.6cm')
+
+function measurePrintCellHeight(): void {
+  const rows = document.querySelectorAll('.fc .fc-daygrid-body tr').length
+  if (!rows) {
+    printCellHeight.value = '2.6cm'
+    return
+  }
+  // Usable height of a landscape page after margins, less the month title
+  // and weekday-header strip. Conservative so Letter and A4 both fit.
+  const perRow = 16.8 / rows
+  printCellHeight.value = `${Math.max(1.6, Math.min(3.4, perRow)).toFixed(2)}cm`
 }
 
 // Also catch the browser's own Ctrl/Cmd-P: set the flag so the chrome is
 // hidden even though there's no chance to reflow first.
 function onBeforePrint(): void {
   printing.value = true
+  measurePrintCellHeight()
 }
 function onAfterPrint(): void {
   printing.value = false
@@ -256,12 +276,17 @@ function onGlobalKeydown(e: KeyboardEvent): void {
   if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
   const key = e.key.toLowerCase()
   if (key === 'c' && detailEvent.value) {
+    // Mirror the Duplicate action's guard -- a read-only source (shared
+    // calendar or subscription) can't be pasted back anywhere, so don't
+    // let it into the clipboard in the first place.
+    if (isReadOnlyEvent(detailEvent.value)) return
     clipboardStore.copy(detailEvent.value)
     flashNotice('Event copied — press Ctrl/⌘-V to paste a copy')
   } else if (key === 'v' && clipboardStore.copied) {
     e.preventDefault()
     // Paste always lands as a one-off, even from a recurring source (the
     // "whole series" path is only offered via the explicit Duplicate action).
+    if (isReadOnlyEvent(clipboardStore.copied)) return
     startDuplicate(clipboardStore.copied, 'single')
   }
 }
@@ -316,6 +341,11 @@ function onSelect(arg: DateSelectArg): void {
 }
 
 function closeDialogs(): void {
+  // The detail popover sits above every dialog overlay; if it's left open
+  // (e.g. the Ctrl-V paste path, which doesn't go through onDetailClose)
+  // its Edit button can stack a second dialog on top of the new one.
+  detailEvent.value = null
+  detailPosition.value = null
   editingEvent.value = null
   isCreating.value = false
   createSlot.value = null
@@ -477,6 +507,15 @@ function onScopeChosen(scope: EditScope): void {
 // --- drag / resize: FullCalendar renders the move immediately and calls
 // revert() if we report failure, giving true optimistic UX for free. ---
 
+// FullCalendar hands back a Date at local midnight for an all-day event.
+// Serialising that with toISOString() in a positive-offset timezone rolls
+// it back to the previous day (the server takes the UTC date), so emit a
+// bare local YYYY-MM-DD instead -- matching how all-day starts are stored.
+function dropDateString(d: Date | null, allDay: boolean, fallback: string): string {
+  if (!d) return fallback
+  return allDay ? (DateTime.fromJSDate(d).toISODate() ?? fallback) : d.toISOString()
+}
+
 function toFields(event: CalendarObject, start: string, end: string): EventFields {
   return {
     summary: event.summary,
@@ -526,8 +565,8 @@ async function onEventDrop(arg: EventDropArg): Promise<void> {
     errorBanner.value = 'Drag-and-drop is not yet supported for recurring events -- use the edit dialog.'
     return
   }
-  const start = arg.event.start?.toISOString() ?? event.start
-  const end = (arg.event.end ?? arg.event.start)?.toISOString() ?? event.end
+  const start = dropDateString(arg.event.start, event.allDay, event.start)
+  const end = dropDateString(arg.event.end ?? arg.event.start, event.allDay, event.end)
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
       href: event.href,
@@ -551,8 +590,8 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
     errorBanner.value = 'Resizing is not yet supported for recurring events -- use the edit dialog.'
     return
   }
-  const start = arg.event.start?.toISOString() ?? event.start
-  const end = (arg.event.end ?? arg.event.start)?.toISOString() ?? event.end
+  const start = dropDateString(arg.event.start, event.allDay, event.start)
+  const end = dropDateString(arg.event.end ?? arg.event.start, event.allDay, event.end)
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
       href: event.href,
@@ -701,7 +740,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 </script>
 
 <template>
-  <div class="layout" :class="{ 'layout--printing': printing }">
+  <div class="layout" :class="{ 'layout--printing': printing }" :style="{ '--print-cell-h': printCellHeight }">
     <aside class="sidebar">
       <div class="sidebar__brand">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1152,19 +1191,33 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  /* FullCalendar draws week dividers as table-row borders; pagination made
-     the browser drop some. Force an explicit divider on every row/cell. */
+  /* FullCalendar draws its grid lines as table borders; pagination + the
+     browser's ink saver drop some (whole week dividers, and roughly every
+     other column line). Force an explicit 1px border on every edge -- both
+     axes -- so the grid always prints complete. */
   .fc-scrollgrid,
   .fc-scrollgrid td,
   .fc-scrollgrid th {
     border-color: var(--color-border) !important;
+    border-style: solid !important;
+  }
+  .fc .fc-scrollgrid {
+    border-left: 1px solid var(--color-border) !important;
+    border-top: 1px solid var(--color-border) !important;
   }
   .fc .fc-daygrid-body tr,
   .fc .fc-daygrid-day {
     border-bottom: 1px solid var(--color-border) !important;
   }
-  /* Fill the sheet: let the grid grow and give each week row enough height
-     to span a landscape page rather than clustering at the top. */
+  .fc .fc-col-header-cell,
+  .fc .fc-daygrid-day,
+  .fc .fc-scrollgrid-sync-table td {
+    border-right: 1px solid var(--color-border) !important;
+  }
+  /* Fill the sheet: let the grid grow, with each week row tall enough to
+     spread down the page. --print-cell-h is sized in JS from the real row
+     count so the month still fits on one page (fallback covers Ctrl/Cmd-P
+     before the measure runs). */
   .fc,
   .fc .fc-view-harness,
   .fc .fc-daygrid-body,
@@ -1173,10 +1226,16 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     width: 100% !important;
   }
   .fc-daygrid-day-frame {
-    min-height: 3.1cm !important;
+    min-height: var(--print-cell-h, 2.6cm) !important;
   }
+  /* A month grid is landscape-shaped; force it so a 7-column week never
+     wraps or overflows onto a second page. */
   @page {
-    margin: 1.2cm;
+    size: landscape;
+    margin: 1cm;
+  }
+  .fc .fc-daygrid-body tr {
+    break-inside: avoid;
   }
 }
 
@@ -1197,7 +1256,16 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 .layout--printing .fc .fc-daygrid-day {
   border-bottom: 1px solid var(--color-border);
 }
+.layout--printing .fc .fc-col-header-cell,
+.layout--printing .fc .fc-daygrid-day,
+.layout--printing .fc .fc-scrollgrid-sync-table td {
+  border-right: 1px solid var(--color-border);
+}
+.layout--printing .fc .fc-scrollgrid {
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+}
 .layout--printing .fc-daygrid-day-frame {
-  min-height: 3.1cm;
+  min-height: var(--print-cell-h, 2.6cm);
 }
 </style>

@@ -42,8 +42,10 @@ const weeks = computed(() => {
   const cells: DateTime[] = Array.from({ length: 42 }, (_, i) => gridStart.plus({ days: i }))
   const rows: DateTime[][] = []
   for (let i = 0; i < 42; i += 7) rows.push(cells.slice(i, i + 7))
-  // Drop a trailing all-next-month row when the month only spans 5 weeks.
-  return rows.filter((row, i) => i < 5 || row.some((d) => d.month === first.month))
+  // Keep only rows that actually contain a day of this month. A month
+  // always spans at least 4 rows, so those are safe to keep unconditionally;
+  // rows 5 and 6 render only when the month really reaches into them.
+  return rows.filter((row, i) => i < 4 || row.some((d) => d.month === first.month))
 })
 
 function shift(delta: number): void {
