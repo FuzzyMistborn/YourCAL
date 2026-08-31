@@ -3,6 +3,8 @@ import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventD
 import dayGridPlugin from '@fullcalendar/daygrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import type { EventResizeDoneArg } from '@fullcalendar/interaction'
+import listPlugin from '@fullcalendar/list'
+import multiMonthPlugin from '@fullcalendar/multimonth'
 import FullCalendar from '@fullcalendar/vue3'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
@@ -14,6 +16,7 @@ import EventDetailPopover from '../components/EventDetailPopover.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import EventEditDialog from '../components/EventEditDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
+import MiniMonth from '../components/MiniMonth.vue'
 import RecurrenceScopeDialog from '../components/RecurrenceScopeDialog.vue'
 import SearchBox from '../components/SearchBox.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
@@ -134,9 +137,19 @@ async function loadVisibleRange(): Promise<void> {
   }
 }
 
+// The first day of the period the main view is showing (not arg.start,
+// which includes leading days from the previous month in a month grid) --
+// drives the sidebar mini-month so it follows the main calendar.
+const calendarDate = ref<string | null>(null)
+
 function onDatesSet(arg: DatesSetArg): void {
   visibleRange.value = { start: arg.start.toISOString(), end: arg.end.toISOString() }
+  calendarDate.value = arg.view.currentStart.toISOString()
   void loadVisibleRange()
+}
+
+function onMiniMonthNavigate(date: Date): void {
+  fullCalendarRef.value?.getApi().gotoDate(date)
 }
 
 // --- create / edit dialog state ---
@@ -450,13 +463,20 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 }
 
 const calendarOptions = computed<CalendarOptions>(() => ({
-  plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
+  plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin, multiMonthPlugin],
   initialView: 'dayGridMonth',
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
-    right: 'dayGridMonth,timeGridWeek,timeGridDay',
+    right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
   },
+  buttonText: {
+    listMonth: 'Agenda',
+    multiMonthYear: 'Year',
+  },
+  // The agenda view has nothing to show for an empty range -- spell that
+  // out rather than leaving a bare gap.
+  noEventsText: 'No events in this range',
   height: '100%',
   expandRows: true,
   dayMaxEventRows: true,
@@ -586,6 +606,12 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
           Import
         </button>
       </div>
+
+      <MiniMonth
+        :first-day="settingsStore.firstDay"
+        :focus-date="calendarDate"
+        @navigate="onMiniMonthNavigate"
+      />
 
       <CalendarList />
 
