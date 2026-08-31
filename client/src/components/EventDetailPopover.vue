@@ -215,8 +215,10 @@ function formatReminder(minutesBefore: number): string {
 }
 .popover__actions {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
+  gap: 0.4rem;
   margin-top: 0.3rem;
   padding-top: 0.6rem;
   border-top: 1px solid var(--color-border);

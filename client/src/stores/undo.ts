@@ -47,7 +47,9 @@ export const useUndoStore = defineStore('undo', () => {
     running.value = true
     try {
       await offered.run()
-      pending.value = null
+      // A newer action may have replaced the offer while run() was in
+      // flight -- don't clobber that fresher toast.
+      if (pending.value === offered) pending.value = null
     } finally {
       running.value = false
     }
