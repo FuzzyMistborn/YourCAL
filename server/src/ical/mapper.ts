@@ -23,10 +23,24 @@ function parseAlarms(vevent: ICAL.Component): AlarmFields[] {
   return alarms
 }
 
+/**
+ * Serializes an ICAL.Time for a CalendarObject field. An ICAL.Time with
+ * isDate is a calendar date, not an instant: toJSDate().toISOString()
+ * would apply the runtime's local UTC offset and can shift it to the
+ * adjacent day in any non-UTC timezone. Emit date-only values as a bare
+ * "YYYY-MM-DD" string and only timed values as an ISO instant.
+ */
+export function icalTimeToString(t: ICAL.Time): string {
+  return t.isDate ? t.toString() : t.toJSDate().toISOString()
+}
+
 function parseRdates(vevent: ICAL.Component): string[] {
   return vevent
     .getAllProperties('rdate')
-    .map((p) => (p.getFirstValue() as ICAL.Time | null)?.toJSDate().toISOString())
+    .map((p) => {
+      const value = p.getFirstValue() as ICAL.Time | null
+      return value ? icalTimeToString(value) : null
+    })
     .filter((v): v is string => Boolean(v))
 }
 
@@ -62,8 +76,8 @@ export function buildCalendarObject(
     summary: event.summary ?? '',
     description: event.description ?? null,
     location: event.location ?? null,
-    start: opts.start.toJSDate().toISOString(),
-    end: opts.end.toJSDate().toISOString(),
+    start: icalTimeToString(opts.start),
+    end: icalTimeToString(opts.end),
     allDay: opts.start.isDate,
     timezone: opts.start.isDate ? null : (opts.start.zone?.tzid ?? null),
     recurrenceId: opts.recurrenceId,
