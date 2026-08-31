@@ -36,7 +36,7 @@ support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
 / unsubscribe / owner-side management), SQLite read-cache, calendar sort,
 undo toast, agenda / year / mini-month navigator, duplicate event /
-copy-paste.
+copy-paste, print view.
 
 ## Toolchain pins
 
@@ -591,6 +591,30 @@ Client-only. No new API — a duplicate is just a pre-filled create.
   inputs) and Ctrl/⌘-V (opens the pre-filled create dialog). Paste always
   lands as a one-off even from a recurring source.
 - Not yet exercised in a real browser.
+
+## Print view
+
+Client-only, entirely in `CalendarView.vue`. No dedicated route — it
+prints whatever view is currently on screen (month / week / agenda /
+year), just un-clipped.
+
+- A `printing` ref reshapes `calendarOptions` while active: `headerToolbar:
+  false`, `height: 'auto'`, `expandRows`/`dayMaxEventRows` off (so no "+N
+  more" truncation).
+- The sidebar **"Print"** button calls `printCalendar()` — sets `printing`,
+  `await nextTick()` + one rAF for FullCalendar's reflow, then
+  `window.print()`. A `beforeprint` listener also sets `printing` for the
+  browser's own Ctrl/⌘-P (no reflow chance there, but the chrome still
+  hides); `afterprint` clears it.
+- Styling: a `.layout--printing` class (screen-time hook) plus an
+  `@media print` block, both in the **unscoped** `<style>` so they reach
+  the teleported `UndoToast` and FullCalendar's own markup. They hide the
+  sidebar / banners / toast / popover, flatten `.calendar-card`, set
+  `print-color-adjust: exact` on events, and `@page { margin: 1.2cm }`.
+- Auto-switching to the agenda view for printing was considered and
+  dropped — restoring the prior view after `afterprint` races the print
+  dialog across browsers. Pick Agenda first, then Print.
+- Not yet exercised in a real browser / real print preview.
 
 ## External access
 
