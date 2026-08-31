@@ -9,7 +9,7 @@ import FullCalendar from '@fullcalendar/vue3'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CalendarList from '../components/CalendarList.vue'
 import ConflictDialog from '../components/ConflictDialog.vue'
 import EventDetailPopover from '../components/EventDetailPopover.vue'
@@ -45,6 +45,32 @@ const clipboardStore = useClipboardStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
+
+// True while a print is in progress -- reshapes calendarOptions (no
+// toolbar, natural height, no event-row clipping) and drives the
+// `.layout--printing` / @media print styles.
+const printing = ref(false)
+
+// Triggered by the sidebar "Print" button. Flip into print layout, wait
+// for FullCalendar to re-render at its natural height, then open the
+// dialog; afterprint (below) flips back.
+async function printCalendar(): Promise<void> {
+  printing.value = true
+  await nextTick()
+  // A rAF after nextTick gives FullCalendar's own post-option-change
+  // reflow a frame to settle before the (synchronous, blocking) print.
+  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+  window.print()
+}
+
+// Also catch the browser's own Ctrl/Cmd-P: set the flag so the chrome is
+// hidden even though there's no chance to reflow first.
+function onBeforePrint(): void {
+  printing.value = true
+}
+function onAfterPrint(): void {
+  printing.value = false
+}
 // Transient positive feedback (e.g. "Event copied"), auto-clears.
 const noticeBanner = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
@@ -546,11 +572,15 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 const calendarOptions = computed<CalendarOptions>(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin, multiMonthPlugin],
   initialView: 'dayGridMonth',
-  headerToolbar: {
-    left: 'prev,next today',
-    center: 'title',
-    right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
-  },
+  // While printing, drop the toolbar and let the grid grow to its natural
+  // height with every event shown (no "+N more" clipping) -- see onBeforePrint.
+  headerToolbar: printing.value
+    ? false
+    : {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
+      },
   buttonText: {
     listMonth: 'Agenda',
     multiMonthYear: 'Year',
@@ -558,9 +588,9 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   // The agenda view has nothing to show for an empty range -- spell that
   // out rather than leaving a bare gap.
   noEventsText: 'No events in this range',
-  height: '100%',
-  expandRows: true,
-  dayMaxEventRows: true,
+  height: printing.value ? 'auto' : '100%',
+  expandRows: !printing.value,
+  dayMaxEventRows: !printing.value,
   firstDay: settingsStore.firstDay,
   editable: true,
   selectable: true,
@@ -632,12 +662,16 @@ function onImported(): void {
 
 onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('beforeprint', onBeforePrint)
+  window.addEventListener('afterprint', onAfterPrint)
   await calendarsStore.load()
   await loadVisibleRange()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('beforeprint', onBeforePrint)
+  window.removeEventListener('afterprint', onAfterPrint)
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
@@ -667,7 +701,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 </script>
 
 <template>
-  <div class="layout">
+  <div class="layout" :class="{ 'layout--printing': printing }">
     <aside class="sidebar">
       <div class="sidebar__brand">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -691,6 +725,13 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
         </button>
         <button class="btn btn-secondary sidebar__import" title="Import .ics file" @click="showImportDialog = true">
           Import
+        </button>
+        <button
+          class="btn btn-secondary sidebar__print"
+          title="Print the current view"
+          @click="printCalendar"
+        >
+          Print
         </button>
       </div>
 
@@ -868,7 +909,8 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   flex: 1;
   font-size: 0.88rem;
 }
-.sidebar__import {
+.sidebar__import,
+.sidebar__print {
   flex-shrink: 0;
   font-size: 0.85rem;
   padding: 0.5rem 0.7rem;
@@ -1075,5 +1117,54 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 .fc-timegrid-slot-label-cushion {
   color: var(--color-text-faint);
   font-size: 0.75rem;
+}
+
+/* --- Print --- unscoped so it also reaches the teleported UndoToast and
+   FullCalendar's own markup. `.layout--printing` is toggled just before
+   window.print() (and on the browser's own Ctrl/Cmd-P via beforeprint);
+   the @media print block is the fallback for anything that slips through. */
+@media print {
+  .sidebar,
+  .error-banner,
+  .notice-banner,
+  .undo-toast,
+  .popover {
+    display: none !important;
+  }
+  .layout {
+    display: block !important;
+    height: auto !important;
+  }
+  .main {
+    padding: 0 !important;
+  }
+  .calendar-card {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  /* Keep calendar/event colors instead of the browser's ink-saving wash. */
+  .fc-event,
+  .fc-daygrid-event-dot {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  @page {
+    margin: 1.2cm;
+  }
+}
+
+.layout--printing .sidebar,
+.layout--printing .error-banner,
+.layout--printing .notice-banner {
+  display: none;
+}
+.layout--printing .main {
+  padding: 0;
+}
+.layout--printing .calendar-card {
+  border: none;
+  box-shadow: none;
+  padding: 0;
 }
 </style>
