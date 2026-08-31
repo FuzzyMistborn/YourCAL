@@ -16,7 +16,7 @@ import * as editScope from '../ical/editScope.js'
 import { mergeIcsObjects } from '../ical/exportIcs.js'
 import { splitImportIcs } from '../ical/importIcs.js'
 import { calendarObjectToIcs } from '../ical/mapper.js'
-import { eventFieldsError } from '../ical/validate.js'
+import { eventFieldsError, timeRangeError } from '../ical/validate.js'
 import { decodeId } from '../store/idCodec.js'
 import { EtagConflictError } from '../store/errors.js'
 import type { RawObject } from '../store/CalendarStore.js'
@@ -68,7 +68,13 @@ async function loadOwnedRawObject(
 ): Promise<RawObject | null> {
   const calendarUrl = decodeId(calendar.id)
   assertHrefSameHost(dav.baseUrl, href)
-  const calPath = new URL(calendarUrl).pathname
+  // Normalize the collection path to a trailing slash so the prefix test
+  // is a real segment-boundary check: without it, a collection URL served
+  // without a trailing slash would let `/calendars/foo` prefix-match
+  // `/calendars/foobar/...`. Defense-in-depth -- the DAV server enforces
+  // real permissions underneath.
+  const rawCalPath = new URL(calendarUrl).pathname
+  const calPath = rawCalPath.endsWith('/') ? rawCalPath : `${rawCalPath}/`
   const hrefPath = new URL(href, calendarUrl).pathname
   if (!hrefPath.startsWith(calPath)) {
     reply.code(403).send({ error: 'forbidden', message: 'Event does not belong to this calendar' })
@@ -252,11 +258,12 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
       if (!dav) return
 
       const { start, end } = req.query
-      if (!start || !end) {
-        return reply.code(400).send({ error: 'bad_request', message: 'start and end query params are required' })
+      const rangeError = timeRangeError(start, end)
+      if (rangeError) {
+        return reply.code(400).send({ error: 'bad_request', message: rangeError })
       }
 
-      const events = await store.getEvents(dav, req.params.id, { start, end })
+      const events = await store.getEvents(dav, req.params.id, { start: start as string, end: end as string })
       return reply.send(events)
     },
   )
@@ -269,6 +276,10 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
 
       const start = req.query.start ?? EXPORT_DEFAULT_START
       const end = req.query.end ?? EXPORT_DEFAULT_END
+      const rangeError = timeRangeError(start, end)
+      if (rangeError) {
+        return reply.code(400).send({ error: 'bad_request', message: rangeError })
+      }
 
       // getEvents returns one expanded CalendarObject per *occurrence* --
       // dedupe by href (all occurrences of a recurring series share the
@@ -305,7 +316,13 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(created)
   })
 
-  app.post<{ Params: { id: string }; Body: { ics: string } }>('/:id/import', async (req, reply) => {
+  // ICS exports of a few thousand events run well past Fastify's default
+  // 1MB body limit; without this a large but legitimate import 413s before
+  // the handler (and its MAX_IMPORT_EVENTS cap) ever runs.
+  app.post<{ Params: { id: string }; Body: { ics: string } }>(
+    '/:id/import',
+    { bodyLimit: 25 * 1024 * 1024 },
+    async (req, reply) => {
     const dav = requireSession(req, reply)
     if (!dav) return
     if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
@@ -422,7 +439,16 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'bad_request', message: 'href query param is required' })
       }
 
-      const raw = await store.getRawObject(dav, req.query.href)
+      // Apply the same ownership discipline the write routes get
+      // (href-under-calendar-path + UID match) rather than fetching any
+      // same-host href the caller's credentials can read.
+      const calendars = await store.discoverCalendars(dav)
+      const calendar = calendars.find((c) => c.id === req.params.id)
+      if (!calendar) {
+        return reply.code(404).send({ error: 'not_found', message: 'Calendar not found' })
+      }
+      const raw = await loadOwnedRawObject(dav, calendar, req.query.href, req.params.uid, reply)
+      if (!raw) return
       reply
         .header('Content-Type', 'text/calendar; charset=utf-8')
         .header('Content-Disposition', `attachment; filename="${sanitizeFilename(req.params.uid)}.ics"`)

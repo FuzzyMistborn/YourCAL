@@ -28,6 +28,12 @@ async function main(): Promise<void> {
       reply.code(403).send({ error: 'host_not_allowed', message: err.message })
       return
     }
+    if ((err as { code?: string }).code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      reply
+        .code(413)
+        .send({ error: 'payload_too_large', message: 'File is too large to import' })
+      return
+    }
     reply.send(err)
   })
 

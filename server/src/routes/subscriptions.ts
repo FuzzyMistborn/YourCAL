@@ -17,6 +17,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         .code(400)
         .send({ error: 'bad_request', message: 'url, start and end query params are required' })
     }
+    if (Number.isNaN(new Date(start).getTime()) || Number.isNaN(new Date(end).getTime())) {
+      return reply.code(400).send({ error: 'bad_request', message: 'start and end must be valid ISO dates' })
+    }
 
     let parsed: URL
     try {

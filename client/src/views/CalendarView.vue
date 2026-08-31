@@ -721,7 +721,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
           :title="writableEnabledCalendarIds.length === 0 ? 'No writable calendar is available' : undefined"
           @click="onNewEventClick"
         >
-          <span aria-hidden="true">+</span> New event
+          <span aria-hidden="true">+</span> New
         </button>
         <button class="btn btn-secondary sidebar__import" title="Import .ics file" @click="showImportDialog = true">
           Import
@@ -1143,11 +1143,37 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     box-shadow: none !important;
     padding: 0 !important;
   }
-  /* Keep calendar/event colors instead of the browser's ink-saving wash. */
+  /* Keep calendar/event colors -- and grid borders -- instead of the
+     browser's ink-saving wash. Applied broadly because Chrome's ink saver
+     was dropping roughly every other week-divider line otherwise. */
+  .fc *,
   .fc-event,
   .fc-daygrid-event-dot {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+  /* FullCalendar draws week dividers as table-row borders; pagination made
+     the browser drop some. Force an explicit divider on every row/cell. */
+  .fc-scrollgrid,
+  .fc-scrollgrid td,
+  .fc-scrollgrid th {
+    border-color: var(--color-border) !important;
+  }
+  .fc .fc-daygrid-body tr,
+  .fc .fc-daygrid-day {
+    border-bottom: 1px solid var(--color-border) !important;
+  }
+  /* Fill the sheet: let the grid grow and give each week row enough height
+     to span a landscape page rather than clustering at the top. */
+  .fc,
+  .fc .fc-view-harness,
+  .fc .fc-daygrid-body,
+  .fc-scrollgrid-sync-table {
+    height: auto !important;
+    width: 100% !important;
+  }
+  .fc-daygrid-day-frame {
+    min-height: 3.1cm !important;
   }
   @page {
     margin: 1.2cm;
@@ -1166,5 +1192,12 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   border: none;
   box-shadow: none;
   padding: 0;
+}
+.layout--printing .fc .fc-daygrid-body tr,
+.layout--printing .fc .fc-daygrid-day {
+  border-bottom: 1px solid var(--color-border);
+}
+.layout--printing .fc-daygrid-day-frame {
+  min-height: 3.1cm;
 }
 </style>

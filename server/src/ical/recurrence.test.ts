@@ -121,4 +121,19 @@ describe('expandCalendarObject', () => {
       expect(new Date(r.start).getTime()).toBeLessThanOrEqual(new Date('2026-03-20T00:00:00.000Z').getTime())
     }
   })
+
+  it('still renders a dense series whose DTSTART is >5000 occurrences before the visible range', () => {
+    // Hourly event starting ~2 years before the window: ~17500 occurrences
+    // precede rangeStart, well past the old 5000-iteration guard budget
+    // that used to make the whole series silently vanish.
+    const ics = calendarObjectToIcs(
+      'uid8',
+      baseFields({ start: '2024-03-10T15:00:00.000Z', end: '2024-03-10T15:30:00.000Z', rrule: 'FREQ=HOURLY' }),
+    )
+    const results = expand(ics, { start: '2026-03-10T00:00:00.000Z', end: '2026-03-11T00:00:00.000Z' })
+    expect(results.length).toBeGreaterThan(20)
+    for (const r of results) {
+      expect(new Date(r.start).getTime()).toBeGreaterThanOrEqual(new Date('2026-03-10T00:00:00.000Z').getTime())
+    }
+  })
 })
