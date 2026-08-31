@@ -9,12 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@yourcal/shared": "*",
     "@fullcalendar/core": "^6.1.21",
     "@fullcalendar/daygrid": "^6.1.15",
     "@fullcalendar/interaction": "^6.1.15",
+    "@fullcalendar/list": "^6.1.21",
+    "@fullcalendar/multimonth": "^6.1.21",
     "@fullcalendar/timegrid": "^6.1.15",
     "@fullcalendar/vue3": "^6.1.21",
+    "@yourcal/shared": "*",
     "luxon": "^3.5.0",
     "pinia": "^4.0.2",
     "vue": "^3.5.41",

@@ -35,7 +35,7 @@ condition, ordinal `BYDAY`, `RDATE`, override preservation), timezone
 support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
 / unsubscribe / owner-side management), SQLite read-cache, calendar sort,
-undo toast.
+undo toast, agenda / year / mini-month navigator.
 
 ## Toolchain pins
 
@@ -544,6 +544,26 @@ Drag-to-reorder was deferred (needs a new client dep).
 This setting plus "Week starts on" and "Default calendar" live in
 `SettingsDialog.vue` (⚙️ next to sign-out), moved out of the sidebar to
 stop it accumulating loose `<select>`s.
+
+## Agenda / year views + mini-month navigator
+
+Client-only, all in `CalendarView.vue` plus one new component.
+
+- **Agenda** (`listMonth`, button "Agenda") and **Year** (`multiMonthYear`,
+  button "Year") are just added FullCalendar plugins —
+  `@fullcalendar/list` + `@fullcalendar/multimonth`, both pinned at
+  `6.1.21` to match the rest of the `@fullcalendar/*` family (see the pin
+  note above). Added to `plugins`, the `headerToolbar` right group, and
+  `buttonText`. `noEventsText` set for the empty agenda case. The events
+  array already suited both; no data changes.
+- **Mini-month** — `client/src/components/MiniMonth.vue`, standalone,
+  luxon-only (no second FullCalendar instance). Props: `firstDay`
+  (0=Sun..6=Sat, from settings) and `focusDate` (ISO). It follows the main
+  calendar via `focusDate` — `onDatesSet` records `arg.view.currentStart`
+  (not `arg.start`, which includes a month grid's leading days) into a
+  `calendarDate` ref — but the user can page it independently. Clicking a
+  day emits `navigate` → `fullCalendarRef.getApi().gotoDate(date)`.
+- Not yet exercised in a real browser.
 
 ## External access
 
