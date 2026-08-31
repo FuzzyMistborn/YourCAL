@@ -67,7 +67,12 @@ Dependabot PR #9 bumped only `core`/`vue3` to `7.0.2`; `daygrid`/
 requires one matched major across the family — the mixed set broke module
 resolution at build time. Reverting also required regenerating
 `package-lock.json` from scratch (a plain reinstall kept a stale nested
-`core@7.0.2`). Revisit when all five have a matching stable v7.
+`core@7.0.2`). Revisit when all the packages have a matching stable v7.
+`.github/dependabot.yml` now `ignore`s `@fullcalendar/*`
+`version-update:semver-major`, so the grouped PR stops re-proposing a
+half-family v7 bump every week; drop that ignore when bumping the family
+together. (The family is now seven packages — `list` and `multimonth`
+were added for the agenda/year views.)
 
 ## Dev CalDAV servers (no Docker on this host)
 

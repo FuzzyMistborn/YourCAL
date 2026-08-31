@@ -8,6 +8,15 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+    ignore:
+      # The whole @fullcalendar/* family must move as one matched major
+      # (FullCalendar breaks module resolution on a mixed set -- see
+      # dependabot PR #9 and AGENTS.md "Toolchain pins"). daygrid /
+      # interaction / timegrid have no stable v7 yet, so hold every
+      # @fullcalendar package at v6 until they all do. Drop this once the
+      # family can be bumped together.
+      - dependency-name: "@fullcalendar/*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
