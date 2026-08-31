@@ -212,8 +212,12 @@ challenge/response, caches the challenge per host, bumps `nc`, and
 re-negotiates on a stale nonce. It's wired in as tsdav's `fetch` override
 (tsdav's own `authMethod:'Digest'` is a static-string stub) and used
 directly by the raw sharing/PROPPATCH fetches. Digest was added for
-sabre/dav/Baikal deployments that don't offer Basic; **not yet exercised
-against a live Digest server** (unit-tested only — `dav/auth.test.ts`).
+sabre/dav/Baikal deployments that don't offer Basic. Verified end-to-end
+against real Baikal 0.11.1 with `dav_auth_type: Digest` (login, calendar
+discovery, event create/fetch/delete, raw PROPFIND privilege-set, raw
+PROPPATCH rename); also unit-tested in `dav/auth.test.ts`. To re-test:
+flip `dav_auth_type` to `Digest` in `.dev-baikal/baikal/config/baikal.yaml`
+and restart the `php -S` server.
 
 Client handles mid-tab expiry: `api.ts`'s `request()` dispatches a
 `SESSION_EXPIRED_EVENT` on any non-`/session` 401; `App.vue` clears the
