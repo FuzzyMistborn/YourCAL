@@ -18,6 +18,7 @@ import RecurrenceScopeDialog from '../components/RecurrenceScopeDialog.vue'
 import SearchBox from '../components/SearchBox.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import SubscriptionList from '../components/SubscriptionList.vue'
+import UndoToast from '../components/UndoToast.vue'
 import { ApiRequestError } from '../api.js'
 import { useCalendarsStore } from '../stores/calendars.js'
 import { useEventsStore } from '../stores/events.js'
@@ -25,6 +26,7 @@ import { useNotificationsStore } from '../stores/notifications.js'
 import { useSessionStore } from '../stores/session.js'
 import { useSettingsStore } from '../stores/settings.js'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
+import { useUndoStore } from '../stores/undo.js'
 
 const session = useSessionStore()
 const calendarsStore = useCalendarsStore()
@@ -32,6 +34,7 @@ const eventsStore = useEventsStore()
 const notificationsStore = useNotificationsStore()
 const settingsStore = useSettingsStore()
 const subscriptionsStore = useSubscriptionsStore()
+const undoStore = useUndoStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
@@ -271,6 +274,7 @@ async function doUpdate(
       recurrenceId: event.recurrenceId,
       calendarId,
     })
+    offerEditUndo(event, calendarId, calendarId !== event.calendarId ? 'Moved' : 'Edited')
   } catch (err) {
     if (err instanceof ApiRequestError && err.status === 412) {
       await eventsStore.reloadLastRange()
@@ -290,6 +294,16 @@ async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> 
       scope,
       recurrenceId: event.recurrenceId,
     })
+    // Undo re-creates the event from the copy still in memory. It comes
+    // back with a fresh UID/href (a new CalDAV object) -- fine for a
+    // personal calendar, but it won't restore a recurring series'
+    // overrides, so only offer it for plain non-recurring events.
+    if (!event.isRecurring) {
+      undoStore.offer(`Deleted “${event.summary || '(No title)'}”`, async () => {
+        await eventsStore.createEvent(event.calendarId, toFields(event, event.start, event.end))
+        fullCalendarRef.value?.getApi().refetchEvents()
+      })
+    }
   } catch (err) {
     if (err instanceof ApiRequestError && err.status === 412) {
       await eventsStore.reloadLastRange()
@@ -359,6 +373,30 @@ function toFields(event: CalendarObject, start: string, end: string): EventField
   }
 }
 
+// Offer a short-lived "Undo" for a just-completed edit/move of a
+// non-recurring event. `before` is the pre-edit CalendarObject; undo
+// re-applies its original fields against the server's *current* etag
+// (looked up from the cache, which reloadLastRange has already refreshed
+// by the time this runs). Recurring events are skipped -- reverting them
+// correctly needs an edit-scope choice, out of scope for this toast.
+function offerEditUndo(before: CalendarObject, newCalendarId: string, verb: string): void {
+  if (before.isRecurring) return
+  const fresh = eventsStore.findEvent(newCalendarId, before.uid, null)
+  if (!fresh) return
+  const movedCalendars = newCalendarId !== before.calendarId
+  undoStore.offer(`${verb} “${before.summary || '(No title)'}”`, async () => {
+    await eventsStore.updateEvent(fresh.calendarId, fresh.uid, {
+      href: fresh.href,
+      etag: fresh.etag,
+      fields: toFields(before, before.start, before.end),
+      scope: 'all',
+      recurrenceId: null,
+      calendarId: movedCalendars ? before.calendarId : undefined,
+    })
+    fullCalendarRef.value?.getApi().refetchEvents()
+  })
+}
+
 async function onEventDrop(arg: EventDropArg): Promise<void> {
   const event = arg.event.extendedProps.source as CalendarObject
   if (event.isRecurring) {
@@ -378,6 +416,7 @@ async function onEventDrop(arg: EventDropArg): Promise<void> {
       scope: 'all',
       recurrenceId: null,
     })
+    offerEditUndo(event, event.calendarId, 'Moved')
   } catch (err) {
     arg.revert()
     errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to move event.'
@@ -402,6 +441,7 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
       scope: 'all',
       recurrenceId: null,
     })
+    offerEditUndo(event, event.calendarId, 'Resized')
   } catch (err) {
     arg.revert()
     errorBanner.value = err instanceof ApiRequestError ? err.message : 'Failed to resize event.'
@@ -661,6 +701,8 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       @discard="onConflictDiscard"
       @reapply="onConflictReapply"
     />
+
+    <UndoToast @error="errorBanner = $event" />
   </div>
 </template>
 

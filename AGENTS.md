@@ -34,7 +34,8 @@ subscriptions, recurring-event UI (interval / `BYDAY` picker / end
 condition, ordinal `BYDAY`, `RDATE`, override preservation), timezone
 support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
-/ unsubscribe / owner-side management), SQLite read-cache, calendar sort.
+/ unsubscribe / owner-side management), SQLite read-cache, calendar sort,
+undo toast.
 
 ## Toolchain pins
 
@@ -479,6 +480,33 @@ All verified against real Radicale.
     `DTSTART` delta (`shiftOverride()`), leaves all other fields
     untouched; `applyThisAndFuture` also re-keys them onto the new
     series's UID. Falls back to drop-everything only on an all-day toggle.
+
+## Undo toast
+
+Client-only. `client/src/stores/undo.ts` holds a single pending
+`{ message, run }` offer with an 8s self-clearing timer (a new offer
+replaces any still-pending one); `UndoToast.vue` is mounted once in
+`CalendarView.vue` and shows message + Undo + dismiss. The pre-existing
+delete `ConfirmDialog` is unchanged — the toast is an *additional* safety
+net, not a replacement (deliberate, per the feature plan).
+
+Undo is offered only for **non-recurring** events, on: delete
+(`doDelete`), calendar-move / field-edit via the edit dialog (`doUpdate`,
+`offerEditUndo`), and drag / resize (`onEventDrop` / `onEventResize`).
+
+- **Delete undo re-creates the event** via `eventsStore.createEvent` from
+  the `CalendarObject` still in memory → it comes back with a **fresh
+  UID/href** (new CalDAV object). Acceptable for a personal calendar;
+  would not restore a recurring series' overrides, hence non-recurring
+  only.
+- **Edit/move undo** re-applies the pre-edit `CalendarObject`'s original
+  fields (`toFields(before, before.start, before.end)`) against the
+  server's *current* etag, looked up via `eventsStore.findEvent` after
+  `reloadLastRange` has refreshed the cache. `scope: 'all'` always (safe:
+  non-recurring).
+- Recurring events: no toast — reverting them needs an edit-scope choice.
+  Cross-calendar / all-day recurring moves likewise not covered.
+- Not yet exercised in a real browser.
 
 ## SQLite read-cache (`SqliteCalendarStore`)
 
