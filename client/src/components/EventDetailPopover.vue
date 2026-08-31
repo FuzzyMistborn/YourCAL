@@ -14,7 +14,7 @@ const props = defineProps<{
   readOnly?: boolean
 }>()
 
-const emit = defineEmits<{ edit: []; delete: []; close: [] }>()
+const emit = defineEmits<{ edit: []; delete: []; duplicate: []; close: [] }>()
 
 const popoverEl = ref<HTMLElement | null>(null)
 const style = ref({ top: '0px', left: '0px' })
@@ -130,6 +130,9 @@ function formatReminder(minutesBefore: number): string {
           @click="onExport"
         >
           ⬇
+        </button>
+        <button v-if="!readOnly" type="button" class="btn btn-ghost" title="Duplicate event" @click="emit('duplicate')">
+          Duplicate
         </button>
         <button v-if="!readOnly" type="button" class="btn btn-primary" @click="emit('edit')">Edit</button>
       </div>

@@ -9,11 +9,13 @@ import FullCalendar from '@fullcalendar/vue3'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CalendarList from '../components/CalendarList.vue'
 import ConflictDialog from '../components/ConflictDialog.vue'
 import EventDetailPopover from '../components/EventDetailPopover.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import DuplicateScopeDialog from '../components/DuplicateScopeDialog.vue'
+import type { DuplicateScope } from '../components/DuplicateScopeDialog.vue'
 import EventEditDialog from '../components/EventEditDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import MiniMonth from '../components/MiniMonth.vue'
@@ -30,6 +32,7 @@ import { useSessionStore } from '../stores/session.js'
 import { useSettingsStore } from '../stores/settings.js'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
 import { useUndoStore } from '../stores/undo.js'
+import { useClipboardStore } from '../stores/clipboard.js'
 
 const session = useSessionStore()
 const calendarsStore = useCalendarsStore()
@@ -38,9 +41,18 @@ const notificationsStore = useNotificationsStore()
 const settingsStore = useSettingsStore()
 const subscriptionsStore = useSubscriptionsStore()
 const undoStore = useUndoStore()
+const clipboardStore = useClipboardStore()
 
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
+// Transient positive feedback (e.g. "Event copied"), auto-clears.
+const noticeBanner = ref<string | null>(null)
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+function flashNotice(message: string): void {
+  noticeBanner.value = message
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => (noticeBanner.value = null), 2000)
+}
 
 const enabledCalendarIds = computed(() =>
   calendarsStore.calendars.filter((c) => calendarsStore.enabled[c.id]).map((c) => c.id),
@@ -161,6 +173,73 @@ const detailEvent = ref<CalendarObject | null>(null)
 const detailPosition = ref<{ x: number; y: number } | null>(null)
 const confirmingDelete = ref<CalendarObject | null>(null)
 
+// --- duplicate / copy-paste ---
+
+// A recurring event awaiting the "this occurrence vs whole series" choice.
+const duplicateScopeEvent = ref<CalendarObject | null>(null)
+// Seeds the create dialog with a pre-filled copy. `event` is the source
+// occurrence; `scope` decides whether the repeat rule is carried over.
+const duplicateTemplate = ref<{ event: CalendarObject; scope: DuplicateScope } | null>(null)
+
+// The CalendarObject handed to EventEditDialog as its content template --
+// a 'single' duplicate/paste strips all recurrence so it lands as a plain
+// one-off event.
+const duplicateTemplateObject = computed<CalendarObject | null>(() => {
+  const t = duplicateTemplate.value
+  if (!t) return null
+  return t.scope === 'series'
+    ? t.event
+    : { ...t.event, rrule: null, rdate: [], isRecurring: false, recurrenceId: null }
+})
+
+function requestDuplicate(event: CalendarObject): void {
+  if (isReadOnlyEvent(event)) return
+  if (event.isRecurring) {
+    duplicateScopeEvent.value = event
+  } else {
+    startDuplicate(event, 'single')
+  }
+}
+
+function startDuplicate(event: CalendarObject, scope: DuplicateScope): void {
+  closeDialogs()
+  duplicateTemplate.value = { event, scope }
+}
+
+function onDuplicateScopeChosen(scope: DuplicateScope): void {
+  const event = duplicateScopeEvent.value
+  duplicateScopeEvent.value = null
+  if (event) startDuplicate(event, scope)
+}
+
+function onDetailDuplicate(): void {
+  const event = detailEvent.value
+  onDetailClose()
+  if (event) requestDuplicate(event)
+}
+
+function onEditDuplicate(): void {
+  const event = editingEvent.value
+  closeDialogs()
+  if (event) requestDuplicate(event)
+}
+
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if (!(e.ctrlKey || e.metaKey)) return
+  const target = e.target as HTMLElement | null
+  if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+  const key = e.key.toLowerCase()
+  if (key === 'c' && detailEvent.value) {
+    clipboardStore.copy(detailEvent.value)
+    flashNotice('Event copied — press Ctrl/⌘-V to paste a copy')
+  } else if (key === 'v' && clipboardStore.copied) {
+    e.preventDefault()
+    // Paste always lands as a one-off, even from a recurring source (the
+    // "whole series" path is only offered via the explicit Duplicate action).
+    startDuplicate(clipboardStore.copied, 'single')
+  }
+}
+
 function calendarNameFor(calendarId: string): string {
   const calendar = calendarsStore.calendars.find((c) => c.id === calendarId)
   if (calendar) return calendar.displayName
@@ -216,6 +295,8 @@ function closeDialogs(): void {
   createSlot.value = null
   pendingScopeAction.value = null
   confirmingDelete.value = null
+  duplicateScopeEvent.value = null
+  duplicateTemplate.value = null
 }
 
 async function onCreateSave(calendarId: string, fields: EventFields): Promise<void> {
@@ -550,8 +631,14 @@ function onImported(): void {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', onGlobalKeydown)
   await calendarsStore.load()
   await loadVisibleRange()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
 // A calendar created (or toggled on) after the initial load has never had
@@ -654,6 +741,9 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       <Transition name="banner">
         <p v-if="errorBanner" class="error-banner" @click="errorBanner = null">{{ errorBanner }}</p>
       </Transition>
+      <Transition name="banner">
+        <p v-if="noticeBanner" class="notice-banner">{{ noticeBanner }}</p>
+      </Transition>
       <div ref="calendarCardRef" class="calendar-card">
         <FullCalendar ref="fullCalendarRef" :options="calendarOptions" />
       </div>
@@ -669,6 +759,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       :read-only="isReadOnlyEvent(detailEvent)"
       @edit="onDetailEdit"
       @delete="onDetailDelete"
+      @duplicate="onDetailDuplicate"
       @close="onDetailClose"
     />
 
@@ -689,6 +780,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       :default-calendar-id="editingEvent.calendarId"
       @save="onEditSave"
       @remove="onEditDelete"
+      @duplicate="onEditDuplicate"
       @close="closeDialogs"
     />
 
@@ -702,6 +794,26 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
       :initial-all-day="createSlot.allDay"
       @save="onCreateSave"
       @close="closeDialogs"
+    />
+
+    <EventEditDialog
+      v-if="duplicateTemplate && duplicateTemplateObject"
+      :event="null"
+      :calendars="calendarsStore.calendars"
+      :default-calendar-id="duplicateTemplate.event.calendarId"
+      :initial-start="duplicateTemplate.event.start"
+      :initial-end="duplicateTemplate.event.end"
+      :initial-all-day="duplicateTemplate.event.allDay"
+      :template="duplicateTemplateObject"
+      @save="onCreateSave"
+      @close="closeDialogs"
+    />
+
+    <DuplicateScopeDialog
+      v-if="duplicateScopeEvent"
+      :summary="duplicateScopeEvent.summary"
+      @choose="onDuplicateScopeChosen"
+      @cancel="duplicateScopeEvent = null"
     />
 
     <ConfirmDialog
@@ -870,6 +982,14 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   border-radius: var(--radius-sm);
   margin: 0 0 0.85rem;
   cursor: pointer;
+  font-size: 0.85rem;
+}
+.notice-banner {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius-sm);
+  margin: 0 0 0.85rem;
   font-size: 0.85rem;
 }
 .banner-enter-active,

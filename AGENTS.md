@@ -35,7 +35,8 @@ condition, ordinal `BYDAY`, `RDATE`, override preservation), timezone
 support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
 / unsubscribe / owner-side management), SQLite read-cache, calendar sort,
-undo toast, agenda / year / mini-month navigator.
+undo toast, agenda / year / mini-month navigator, duplicate event /
+copy-paste.
 
 ## Toolchain pins
 
@@ -563,6 +564,32 @@ Client-only, all in `CalendarView.vue` plus one new component.
   (not `arg.start`, which includes a month grid's leading days) into a
   `calendarDate` ref — but the user can page it independently. Clicking a
   day emits `navigate` → `fullCalendarRef.getApi().gotoDate(date)`.
+- Not yet exercised in a real browser.
+
+## Duplicate event / copy-paste
+
+Client-only. No new API — a duplicate is just a pre-filled create.
+
+- **`EventEditDialog.vue`** gained an optional `template?: CalendarObject`
+  prop. When creating (`event === null`) it seeds the *content* fields
+  (title → "Copy of …", notes, location, color, reminders, recurrence,
+  rdates, timezone/all-day) from `template`; `initialStart/End/AllDay`
+  still supply the times. A new `source = props.event ?? props.template`
+  const drives all the content initializers — `props.event` alone still
+  drives `isEditing` (so a duplicate shows Save, no Delete). Also emits
+  `duplicate` (button shown only while editing).
+- **`EventDetailPopover.vue`** has a "Duplicate" button (emits
+  `duplicate`), hidden when read-only.
+- **`CalendarView.vue`** — `requestDuplicate()` opens the pre-filled
+  create dialog directly for non-recurring events; for recurring ones it
+  first shows **`DuplicateScopeDialog.vue`** (this occurrence as a one-off
+  vs. the whole series). `duplicateTemplateObject` strips
+  `rrule/rdate/isRecurring/recurrenceId` for the 'single' choice.
+- **Copy-paste** — `stores/clipboard.ts` holds one `CalendarObject`
+  in memory (no OS clipboard, no ICS). A window `keydown` handler in
+  `CalendarView` does Ctrl/⌘-C (when the detail popover is open, outside
+  inputs) and Ctrl/⌘-V (opens the pre-filled create dialog). Paste always
+  lands as a one-off even from a recurring source.
 - Not yet exercised in a real browser.
 
 ## External access
