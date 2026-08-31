@@ -1,9 +1,10 @@
 import type { LoginRequest, SessionInfo } from '@yourcal/shared'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { detectAuthMethod } from '../dav/auth.js'
 import { evictClient } from '../dav/client.js'
 import { verifyCredentials } from '../dav/discovery.js'
-import { DisallowedHostError } from '../dav/hostAllowlist.js'
+import { assertHostAllowed, DisallowedHostError } from '../dav/hostAllowlist.js'
 
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginRequest }>('/', async (req, reply) => {
@@ -14,8 +15,11 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: 'bad_request', message: 'serverUrl, username and password are required' })
     }
 
+    let authMethod: 'Basic' | 'Digest'
     try {
-      await verifyCredentials({ baseUrl: serverUrl, username, password })
+      assertHostAllowed(serverUrl)
+      authMethod = await detectAuthMethod(serverUrl)
+      await verifyCredentials({ baseUrl: serverUrl, username, password, authMethod })
     } catch (err) {
       if (err instanceof DisallowedHostError) {
         return reply.code(403).send({ error: 'host_not_allowed', message: err.message })
@@ -26,7 +30,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: 'invalid_credentials', message: 'Could not authenticate with the CalDAV server' })
     }
 
-    req.session.set('dav', { baseUrl: serverUrl, username, password })
+    req.session.set('dav', { baseUrl: serverUrl, username, password, authMethod })
 
     const info: SessionInfo = { serverUrl, username, defaultTimezone: config.defaultTimezone }
     return reply.code(201).send(info)

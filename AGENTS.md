@@ -203,6 +203,18 @@ checked every request) and the cookie `maxAge` (`server/src/session.ts`).
 Bug fixed here: previously the cookie had no `maxAge` at all, making it a
 browser-session cookie regardless of the payload TTL.
 
+**Auth scheme** is auto-detected at login (`dav/auth.ts` `detectAuthMethod`
+— one unauthenticated PROPFIND, reads `WWW-Authenticate`) and stored on the
+session (`DavContext.authMethod`, absent ⇒ Basic). All CalDAV traffic goes
+through `dav/auth.ts` `davFetch`: Basic just attaches the header; Digest
+(RFC 2617/7616, MD5/`-sess`/SHA-256, `qop=auth`) does the 401
+challenge/response, caches the challenge per host, bumps `nc`, and
+re-negotiates on a stale nonce. It's wired in as tsdav's `fetch` override
+(tsdav's own `authMethod:'Digest'` is a static-string stub) and used
+directly by the raw sharing/PROPPATCH fetches. Digest was added for
+sabre/dav/Baikal deployments that don't offer Basic; **not yet exercised
+against a live Digest server** (unit-tested only — `dav/auth.test.ts`).
+
 Client handles mid-tab expiry: `api.ts`'s `request()` dispatches a
 `SESSION_EXPIRED_EVENT` on any non-`/session` 401; `App.vue` clears the
 store and routes to `/login?expired=1`, where `LoginView.vue` shows a

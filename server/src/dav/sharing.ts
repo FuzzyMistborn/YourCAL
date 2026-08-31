@@ -1,13 +1,12 @@
 import type { OwnedShare, PendingShare, ShareCalendarInput, ShareCalendarResult, UnsubscribeResult } from '@yourcal/shared'
 import { xml2js } from 'xml-js'
 import { decodeId, encodeId } from '../store/idCodec.js'
+import { davFetch } from './auth.js'
 import type { DavContext } from './context.js'
 
-export class ShareFailedError extends Error {}
+export { basicAuthHeader } from './auth.js'
 
-export function basicAuthHeader(ctx: DavContext): Record<string, string> {
-  return { Authorization: 'Basic ' + Buffer.from(`${ctx.username}:${ctx.password}`).toString('base64') }
-}
+export class ShareFailedError extends Error {}
 
 export function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!)
@@ -31,9 +30,9 @@ export function escapeXml(value: string): string {
  */
 async function fetchCalendarDisplayName(ctx: DavContext, calendarUrl: string): Promise<string | null> {
   try {
-    const res = await fetch(calendarUrl, {
+    const res = await davFetch(ctx, calendarUrl, {
       method: 'PROPFIND',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      headers: { 'Content-Type': 'application/xml', Depth: '0' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
     })
     if (!res.ok) return null
@@ -55,7 +54,6 @@ async function tryRadicaleShare(
   const pathOrToken = `/${input.recipient}/${ctx.username}-${slug}/`
   const permissions = input.permission === 'readwrite' ? 'rw' : 'r'
   const headers = {
-    ...basicAuthHeader(ctx),
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
@@ -73,7 +71,7 @@ async function tryRadicaleShare(
   const displayName = await fetchCalendarDisplayName(ctx, calendarUrl)
   const properties = displayName ? { 'D:displayname': displayName } : undefined
 
-  const create = await fetch(`${ctx.baseUrl}/.sharing/v1/map/create`, {
+  const create = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/create`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -115,7 +113,7 @@ async function tryRadicaleShare(
   const targetPathOrToken = existingPathOrToken ?? pathOrToken
 
   if (existingPathOrToken) {
-    const update = await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
+    const update = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/update`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -130,7 +128,7 @@ async function tryRadicaleShare(
   }
 
   for (const action of ['enable', 'unhide']) {
-    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/${action}`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/${action}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ PathOrToken: targetPathOrToken }),
@@ -141,7 +139,7 @@ async function tryRadicaleShare(
       // already in some valid state before we touched it, so leave it
       // alone rather than deleting a share that predates this request.
       if (!existingPathOrToken) {
-        await fetch(`${ctx.baseUrl}/.sharing/v1/map/delete`, {
+        await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/delete`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ PathOrToken: targetPathOrToken }),
@@ -195,11 +193,10 @@ async function tryBaikalShare(
 ): Promise<ShareCalendarResult> {
   const href = input.recipient.startsWith('mailto:') ? input.recipient : `mailto:${input.recipient}`
   const accessTag = input.permission === 'readwrite' ? '<cs:read-write/>' : '<cs:read/>'
-  const auth = basicAuthHeader(ctx)
 
-  const shareRes = await fetch(calendarUrl, {
+  const shareRes = await davFetch(ctx, calendarUrl, {
     method: 'POST',
-    headers: { ...auth, 'Content-Type': 'application/xml' },
+    headers: { 'Content-Type': 'application/xml' },
     body: `<?xml version="1.0" encoding="utf-8"?>
 <cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
   <cs:set>
@@ -213,9 +210,9 @@ async function tryBaikalShare(
     throw new ShareFailedError(`Baikal cs:share POST failed: ${shareRes.status}`)
   }
 
-  const verifyRes = await fetch(calendarUrl, {
+  const verifyRes = await davFetch(ctx, calendarUrl, {
     method: 'PROPFIND',
-    headers: { ...auth, 'Content-Type': 'application/xml', Depth: '0' },
+    headers: { 'Content-Type': 'application/xml', Depth: '0' },
     body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><d:prop><cs:invite/></d:prop></d:propfind>',
   })
   if (!verifyRes.ok) {
@@ -301,9 +298,9 @@ interface RadicaleMapEntry {
 
 async function fetchRadicaleMapList(ctx: DavContext): Promise<RadicaleMapEntry[]> {
   try {
-    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/list`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/list`, {
       method: 'POST',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({}),
     })
     if (!res.ok) return []
@@ -341,10 +338,10 @@ async function fetchRadicaleMapList(ctx: DavContext): Promise<RadicaleMapEntry[]
 export async function syncShareDisplayNames(ctx: DavContext, pathMapped: string, displayName: string): Promise<void> {
   const entries = await fetchRadicaleMapList(ctx)
   const owned = entries.filter((e) => e.Owner === ctx.username && e.PathMapped === pathMapped && e.PathOrToken)
-  const headers = { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' }
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' }
   for (const entry of owned) {
     try {
-      await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
+      await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/update`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ PathOrToken: entry.PathOrToken, Properties: { 'D:displayname': displayName } }),
@@ -358,10 +355,10 @@ export async function syncShareDisplayNames(ctx: DavContext, pathMapped: string,
 export async function deleteRadicaleSharesForPath(ctx: DavContext, pathMapped: string): Promise<void> {
   const entries = await fetchRadicaleMapList(ctx)
   const owned = entries.filter((e) => e.Owner === ctx.username && e.PathMapped === pathMapped && e.PathOrToken)
-  const headers = { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' }
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' }
   for (const entry of owned) {
     try {
-      await fetch(`${ctx.baseUrl}/.sharing/v1/map/delete`, {
+      await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/delete`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ PathOrToken: entry.PathOrToken }),
@@ -397,9 +394,9 @@ export async function listSharesForCalendar(ctx: DavContext, calendarUrl: string
 
   let baikalShares: OwnedShare[] = []
   try {
-    const res = await fetch(calendarUrl, {
+    const res = await davFetch(ctx, calendarUrl, {
       method: 'PROPFIND',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      headers: { 'Content-Type': 'application/xml', Depth: '0' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><d:prop><cs:invite/></d:prop></d:propfind>',
     })
     if (res.ok) {
@@ -448,9 +445,9 @@ export async function updateSharePermission(
   )
 
   if (radicaleMatch) {
-    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/update`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/update`, {
       method: 'POST',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ PathOrToken: decoded, Permissions: permission === 'readwrite' ? 'rw' : 'r' }),
     })
     if (!res.ok) throw new ShareFailedError(`Radicale map/update failed: ${res.status}`)
@@ -464,9 +461,9 @@ export async function updateSharePermission(
   // place, this will surface as a clear ShareFailedError below rather than
   // silently no-opping.
   const accessTag = permission === 'readwrite' ? '<cs:read-write/>' : '<cs:read/>'
-  const res = await fetch(calendarUrl, {
+  const res = await davFetch(ctx, calendarUrl, {
     method: 'POST',
-    headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+    headers: { 'Content-Type': 'application/xml' },
     body: `<?xml version="1.0" encoding="utf-8"?>
 <cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
   <cs:set>
@@ -493,9 +490,9 @@ export async function revokeShare(ctx: DavContext, calendarUrl: string, token: s
   )
 
   if (radicaleMatch) {
-    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/delete`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/delete`, {
       method: 'POST',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ PathOrToken: decoded }),
     })
     if (!res.ok) throw new ShareFailedError(`Radicale map/delete failed: ${res.status}`)
@@ -506,9 +503,9 @@ export async function revokeShare(ctx: DavContext, calendarUrl: string, token: s
   // send the sharing draft's <cs:remove> block. NOT spike-tested against a
   // live Baikal instance in this session -- surfaces a clear
   // ShareFailedError on any non-2xx rather than silently no-opping.
-  const res = await fetch(calendarUrl, {
+  const res = await davFetch(ctx, calendarUrl, {
     method: 'POST',
-    headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+    headers: { 'Content-Type': 'application/xml' },
     body: `<?xml version="1.0" encoding="utf-8"?>
 <cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
   <cs:remove>
@@ -563,9 +560,9 @@ function findDisplayName(node: unknown): string | null {
  */
 async function fetchShareDisplayName(ctx: DavContext, pathOrToken: string): Promise<string | null> {
   try {
-    const res = await fetch(`${ctx.baseUrl}${pathOrToken}`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}${pathOrToken}`, {
       method: 'PROPFIND',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      headers: { 'Content-Type': 'application/xml', Depth: '0' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
     })
     if (!res.ok) return null
@@ -664,7 +661,6 @@ export async function listPendingRadicaleShares(ctx: DavContext): Promise<Pendin
 export async function unsubscribeFromCalendar(ctx: DavContext, calendarUrl: string): Promise<UnsubscribeResult> {
   const path = new URL(calendarUrl).pathname
   const headers = {
-    ...basicAuthHeader(ctx),
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
@@ -673,7 +669,7 @@ export async function unsubscribeFromCalendar(ctx: DavContext, calendarUrl: stri
   const isRadicaleShare = radicaleShares.some((e) => e.User === ctx.username && e.PathOrToken === path)
 
   if (isRadicaleShare) {
-    const hideRes = await fetch(`${ctx.baseUrl}/.sharing/v1/map/hide`, {
+    const hideRes = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/hide`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ PathOrToken: path }),
@@ -700,7 +696,7 @@ export async function unsubscribeFromCalendar(ctx: DavContext, calendarUrl: stri
     return { dismissedPending: { pathOrToken: path, dismissedAt } }
   }
 
-  const deleteRes = await fetch(calendarUrl, { method: 'DELETE', headers: basicAuthHeader(ctx) })
+  const deleteRes = await davFetch(ctx, calendarUrl, { method: 'DELETE' })
   if (!deleteRes.ok) {
     throw new ShareFailedError(`Could not unsubscribe: DELETE failed with ${deleteRes.status}`)
   }
@@ -710,12 +706,11 @@ export async function unsubscribeFromCalendar(ctx: DavContext, calendarUrl: stri
 /** Accepts a pending Radicale share by enabling+unhiding the recipient's own side. */
 export async function acceptRadicaleShare(ctx: DavContext, pathOrToken: string): Promise<void> {
   const headers = {
-    ...basicAuthHeader(ctx),
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
   for (const action of ['enable', 'unhide']) {
-    const res = await fetch(`${ctx.baseUrl}/.sharing/v1/map/${action}`, {
+    const res = await davFetch(ctx, `${ctx.baseUrl}/.sharing/v1/map/${action}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ PathOrToken: pathOrToken }),

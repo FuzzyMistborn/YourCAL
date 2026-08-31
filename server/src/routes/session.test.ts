@@ -11,6 +11,9 @@ process.env.SESSION_SECRET ??= 'a'.repeat(64)
 const verifyCredentials = vi.fn()
 vi.mock('../dav/discovery.js', () => ({ verifyCredentials: (...args: unknown[]) => verifyCredentials(...args) }))
 
+const detectAuthMethod = vi.fn()
+vi.mock('../dav/auth.js', () => ({ detectAuthMethod: (...args: unknown[]) => detectAuthMethod(...args) }))
+
 const evictClient = vi.fn()
 vi.mock('../dav/client.js', () => ({ evictClient: (...args: unknown[]) => evictClient(...args) }))
 
@@ -55,6 +58,7 @@ describe('POST /api/session', () => {
 
   it('sets the session and returns 201 on valid credentials', async () => {
     verifyCredentials.mockResolvedValue(undefined)
+    detectAuthMethod.mockResolvedValue('Basic')
     const { app, sets } = await buildApp()
     const res = await app.inject({
       method: 'POST',
@@ -63,10 +67,31 @@ describe('POST /api/session', () => {
     })
     expect(res.statusCode).toBe(201)
     expect(res.json()).toMatchObject({ serverUrl: 'https://caldav.example.com/dav/', username: 'alice' })
-    expect(sets).toEqual([['dav', { baseUrl: 'https://caldav.example.com/dav/', username: 'alice', password: 'secret' }]])
+    expect(sets).toEqual([
+      ['dav', { baseUrl: 'https://caldav.example.com/dav/', username: 'alice', password: 'secret', authMethod: 'Basic' }],
+    ])
+  })
+
+  it('stores the detected auth method (Digest) on the session', async () => {
+    verifyCredentials.mockResolvedValue(undefined)
+    detectAuthMethod.mockResolvedValue('Digest')
+    const { app, sets } = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/session',
+      payload: { serverUrl: 'https://baikal.example.com/dav.php/', username: 'alice', password: 'secret' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(sets).toEqual([
+      [
+        'dav',
+        { baseUrl: 'https://baikal.example.com/dav.php/', username: 'alice', password: 'secret', authMethod: 'Digest' },
+      ],
+    ])
   })
 
   it('403s on a DisallowedHostError', async () => {
+    detectAuthMethod.mockResolvedValue('Basic')
     verifyCredentials.mockRejectedValue(new DisallowedHostError('nope'))
     const { app } = await buildApp()
     const res = await app.inject({
@@ -78,6 +103,7 @@ describe('POST /api/session', () => {
   })
 
   it('401s on any other verification failure', async () => {
+    detectAuthMethod.mockResolvedValue('Basic')
     verifyCredentials.mockRejectedValue(new Error('bad creds'))
     const { app } = await buildApp()
     const res = await app.inject({

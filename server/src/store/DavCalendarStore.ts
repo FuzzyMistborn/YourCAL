@@ -7,12 +7,12 @@ import type {
   UnsubscribeResult,
   UpdateCalendarInput,
 } from '@yourcal/shared'
+import { davFetch } from '../dav/auth.js'
 import { createClient } from '../dav/client.js'
 import type { DavContext } from '../dav/context.js'
 import { assertHrefSameHost } from '../dav/hostAllowlist.js'
 import { isCalendarReadOnly } from '../dav/privileges.js'
 import {
-  basicAuthHeader,
   deleteRadicaleSharesForPath,
   escapeXml,
   listRadicaleSharedPaths,
@@ -130,9 +130,9 @@ export class DavCalendarStore implements CalendarStore {
       return existing
     }
 
-    const response = await fetch(url, {
+    const response = await davFetch(ctx, url, {
       method: 'PROPPATCH',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml' },
+      headers: { 'Content-Type': 'application/xml' },
       body: `<?xml version="1.0" encoding="utf-8"?>
 <d:propertyupdate xmlns:d="DAV:">
   <d:set>
@@ -313,7 +313,7 @@ export class DavCalendarStore implements CalendarStore {
   async deleteCalendar(ctx: DavContext, calendarId: string): Promise<void> {
     const url = decodeId(calendarId)
     assertHrefSameHost(ctx.baseUrl, url)
-    const response = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(ctx) })
+    const response = await davFetch(ctx, url, { method: 'DELETE' })
     if (!response.ok) {
       // ShareFailedError (not a plain Error) so the route's error handler
       // can return a clean 422 instead of an opaque 500 -- this is the
