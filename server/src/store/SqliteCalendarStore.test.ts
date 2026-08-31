@@ -230,4 +230,60 @@ describe('SqliteCalendarStore', () => {
     const raw = await store.getRawObject(ctx, 'events/uncached.ics')
     expect(raw.ics).toBe('ICS-CONTENT')
   })
+
+  describe('searchEvents', () => {
+    // Seed the cache by pushing objects through a first sync (populates
+    // search_text via the same path a real sync uses). The range passed to
+    // getEvents only filters the read, not the sync, so a non-overlapping
+    // one is fine here.
+    async function seed(objs: { uid: string; fields?: Record<string, unknown> }[]): Promise<void> {
+      dav.calendars = [calendar()]
+      await store.discoverCalendars(ctx)
+      const changed: CalendarObject[] = []
+      for (const o of objs) {
+        const href = `events/${o.uid}.ics`
+        dav.rawObjects.set(href, { ics: calendarObjectToIcs(o.uid, eventFields(o.fields)), etag: `"${o.uid}"` })
+        changed.push({ uid: o.uid, href } as CalendarObject)
+      }
+      dav.syncResult = { syncToken: 'token-1', changed, deletedHrefs: [] }
+      await store.getEvents(ctx, 'cal1', { start: '1970-01-01T00:00:00.000Z', end: '1971-01-01T00:00:00.000Z' })
+    }
+
+    it('substring-matches summary case-insensitively', async () => {
+      await seed([{ uid: 'a', fields: { summary: 'Team STANDUP' } }, { uid: 'b', fields: { summary: 'Lunch' } }])
+      const results = await store.searchEvents!(ctx, 'standup')
+      expect(results.map((r) => r.summary)).toEqual(['Team STANDUP'])
+    })
+
+    it('matches description and location too', async () => {
+      await seed([
+        { uid: 'c', fields: { summary: 'X', description: 'quarterly Budget review' } },
+        { uid: 'd', fields: { summary: 'Y', location: 'Budget Room' } },
+        { uid: 'e', fields: { summary: 'Z' } },
+      ])
+      const results = await store.searchEvents!(ctx, 'budget')
+      expect(results.map((r) => r.uid).sort()).toEqual(['c', 'd'])
+    })
+
+    it('searches the full history, not a bounded window', async () => {
+      await seed([
+        { uid: 'old', fields: { summary: 'Standup', start: '2005-06-01T10:00:00.000Z', end: '2005-06-01T10:30:00.000Z' } },
+      ])
+      const results = await store.searchEvents!(ctx, 'standup')
+      expect(results).toHaveLength(1)
+      expect(results[0].start).toBe('2005-06-01T10:00:00.000Z')
+    })
+
+    it('returns one result (the series master) for a recurring match', async () => {
+      await seed([{ uid: 'r', fields: { summary: 'Weekly Standup', rrule: 'FREQ=WEEKLY;COUNT=100' } }])
+      const results = await store.searchEvents!(ctx, 'standup')
+      expect(results).toHaveLength(1)
+      expect(results[0].isRecurring).toBe(true)
+    })
+
+    it('returns nothing for a blank query', async () => {
+      await seed([{ uid: 'a', fields: { summary: 'Standup' } }])
+      expect(await store.searchEvents!(ctx, '   ')).toEqual([])
+    })
+  })
 })

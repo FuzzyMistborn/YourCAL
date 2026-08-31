@@ -31,6 +31,16 @@ export interface CalendarStore {
   /** Owner-only: renames/recolors a calendar via PROPPATCH. */
   updateCalendar(ctx: DavContext, calendarId: string, input: UpdateCalendarInput): Promise<Calendar>
   getEvents(ctx: DavContext, calendarId: string, range: TimeRange): Promise<CalendarObject[]>
+  /**
+   * Optional: full-history substring search backed by a real index.
+   * Present only on stores that maintain one (SqliteCalendarStore) -- the
+   * plain DAV store has no server-side text search, so the search route
+   * falls back to its own bounded getEvents sweep when this is absent.
+   * Returns one CalendarObject per matching stored object (the series
+   * master for a recurring event, not every occurrence); the caller sorts
+   * and caps.
+   */
+  searchEvents?(ctx: DavContext, query: string): Promise<CalendarObject[]>
   getRawObject(ctx: DavContext, href: string): Promise<RawObject>
   /**
    * Batched form of getRawObject -- one CalDAV round trip for many hrefs,

@@ -1,11 +1,14 @@
 import type { Calendar, CalendarObject } from '@yourcal/shared'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DavContext } from '../dav/context.js'
 
 process.env.SESSION_SECRET ??= 'a'.repeat(64)
 
-const storeMock = { discoverCalendars: vi.fn(), getEvents: vi.fn() }
+const storeMock: Record<string, ReturnType<typeof vi.fn>> = {
+  discoverCalendars: vi.fn(),
+  getEvents: vi.fn(),
+}
 vi.mock('../store/index.js', () => ({ store: storeMock }))
 
 const { searchRoutes } = await import('./search.js')
@@ -134,5 +137,27 @@ describe('GET /api/search', () => {
     const app = await buildApp()
     const res = await app.inject({ method: 'GET', url: '/api/search?q=standup' })
     expect((res.json() as CalendarObject[])).toHaveLength(100)
+  })
+
+  describe('when the store exposes a search index (searchEvents)', () => {
+    afterEach(() => {
+      delete storeMock.searchEvents
+    })
+
+    it('delegates to store.searchEvents (no window sweep) and still sorts + caps', async () => {
+      const many = Array.from({ length: 150 }, (_, i) =>
+        event({ uid: `u${i}`, summary: 'Standup', start: new Date(2000, 0, 1 + i).toISOString() }),
+      )
+      storeMock.searchEvents = vi.fn().mockResolvedValue(many)
+      const app = await buildApp()
+      const res = await app.inject({ method: 'GET', url: '/api/search?q=standup' })
+
+      const results = res.json() as CalendarObject[]
+      expect(results).toHaveLength(100)
+      expect(storeMock.searchEvents).toHaveBeenCalledWith(dav, 'standup')
+      expect(storeMock.discoverCalendars).not.toHaveBeenCalled()
+      expect(storeMock.getEvents).not.toHaveBeenCalled()
+      expect(results[0].start < results[99].start).toBe(true)
+    })
   })
 })
