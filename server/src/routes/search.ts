@@ -3,6 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import { store } from '../store/index.js'
 import { requireSession } from './requireSession.js'
 
+function invalidDate(value: string | undefined): boolean {
+  return value !== undefined && Number.isNaN(new Date(value).getTime())
+}
+
 const DEFAULT_WINDOW_PAST_DAYS = 365
 const DEFAULT_WINDOW_FUTURE_DAYS = 730
 const MAX_RESULTS = 100
@@ -40,6 +44,9 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
     const q = (req.query.q ?? '').trim()
     if (!q) {
       return reply.code(400).send({ error: 'bad_request', message: 'q query param is required' })
+    }
+    if (invalidDate(req.query.start) || invalidDate(req.query.end)) {
+      return reply.code(400).send({ error: 'bad_request', message: 'start and end must be valid ISO dates' })
     }
 
     const needle = q.toLowerCase()

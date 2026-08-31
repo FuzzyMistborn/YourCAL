@@ -129,7 +129,7 @@ function formatReminder(minutesBefore: number): string {
           title="Export as .ics"
           @click="onExport"
         >
-          ⬇
+          Export
         </button>
         <button v-if="!readOnly" type="button" class="btn btn-ghost" title="Duplicate event" @click="emit('duplicate')">
           Duplicate
