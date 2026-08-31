@@ -24,6 +24,15 @@ function migrateColumns(db: Database.Database): void {
     db.exec('ALTER TABLE objects ADD COLUMN start_ts INTEGER')
     db.exec('ALTER TABLE objects ADD COLUMN end_ts INTEGER')
   }
+
+  const hasSearchText = objectColumns.some((c) => c.name === 'search_text')
+  if (!hasSearchText) {
+    // NULL on backfill for pre-existing rows -- searchEvents skips NULLs, so
+    // those objects just aren't findable until the next sync recomputes the
+    // blob. No index: `instr()` can't use one, and a column scan of a
+    // personal calendar's worth of rows is sub-millisecond.
+    db.exec('ALTER TABLE objects ADD COLUMN search_text TEXT')
+  }
 }
 
 export function applySchema(db: Database.Database): void {
@@ -63,6 +72,10 @@ export function applySchema(db: Database.Database): void {
       -- no known upper bound. See ical/bounds.ts.
       start_ts INTEGER,
       end_ts INTEGER,
+      -- Lowercased SUMMARY/DESCRIPTION/LOCATION blob for substring search
+      -- (searchEvents). NULL until a sync/write recomputes it. See
+      -- ical/searchText.ts.
+      search_text TEXT,
       PRIMARY KEY (user_key, calendar_id, uid),
       FOREIGN KEY (user_key, calendar_id) REFERENCES calendars(user_key, calendar_id) ON DELETE CASCADE
     ) STRICT;

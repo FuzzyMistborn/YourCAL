@@ -291,12 +291,26 @@ or a VTIMEZONE authored by a different server.
 
 ## Search, ICS import, subscriptions
 
-- **Search** — `GET /api/search?q=` (`server/src/routes/search.ts`). No
-  index: loops `discoverCalendars` + `getEvents` over a default ±1yr/±2yr
-  window (overridable), substring-matches summary/description/location,
-  case-insensitive, capped at 100. Scales with calendar count × window,
-  not an index — fine at personal scale. Frontend: `SearchBox.vue`, 300ms
-  debounce, min 2 chars.
+- **Search** — `GET /api/search?q=` (`server/src/routes/search.ts`),
+  substring over summary/description/location, case-insensitive, capped at
+  100, sorted by start. Two backends:
+  - **Cache off (`DavCalendarStore`)** — the route's own `windowSweep`:
+    loops `discoverCalendars` + `getEvents` over a default ±1yr/±2yr window
+    (overridable via `start`/`end`). Bounded by that window by
+    construction; scales with calendar count × window.
+  - **Cache on (`SqliteCalendarStore`, i.e. `CACHE_ENABLED`)** — the store
+    exposes an optional `searchEvents(ctx, q)`; the route uses it instead.
+    It freshens every calendar (`ensureFresh`), then substring-scans a
+    per-object lowercased `search_text` blob (SUMMARY/DESCRIPTION/LOCATION
+    of every VEVENT, built by `ical/searchText.ts`, stored on the `objects`
+    row alongside `start_ts`/`end_ts`). **Full history, no window.**
+    Returns one hit per stored object — the *series master* for a
+    recurring event, not every occurrence (unlike the sweep, which
+    expands). Substring, not FTS5: FTS5 would silently change matching from
+    substring to token-prefix, and an `instr()` column scan of a personal
+    calendar is sub-millisecond. `search_text` is NULL for rows synced
+    before this shipped until their next sync — those just don't match.
+  - Frontend: `SearchBox.vue`, 300ms debounce, min 2 chars; sends only `q`.
 - **ICS import** — `POST /api/calendars/:id/import`, body `{ ics }`.
   `server/src/ical/importIcs.ts` splits a multi-VEVENT file into one
   VCALENDAR per source UID (master + its RECURRENCE-ID overrides), assigns

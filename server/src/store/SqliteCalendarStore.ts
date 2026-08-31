@@ -10,7 +10,9 @@ import type {
 import type Database from 'better-sqlite3'
 import type { DavContext } from '../dav/context.js'
 import { computeObjectBounds } from '../ical/bounds.js'
+import { icsToCalendarObject } from '../ical/mapper.js'
 import { expandCalendarObject } from '../ical/recurrence.js'
+import { extractSearchText } from '../ical/searchText.js'
 import type { CalendarStore, ObjectRef, RawObject, RawObjectWithHref } from './CalendarStore.js'
 import { deriveUserKey } from './sqlite/userKey.js'
 
@@ -193,15 +195,16 @@ export class SqliteCalendarStore implements CalendarStore {
     )
 
     const upsertObject = this.db.prepare(`
-      INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts)
-      VALUES (@userKey, @calendarId, @uid, @href, @etag, @ics, @updatedAt, @startTs, @endTs)
+      INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts, search_text)
+      VALUES (@userKey, @calendarId, @uid, @href, @etag, @ics, @updatedAt, @startTs, @endTs, @searchText)
       ON CONFLICT(user_key, calendar_id, uid) DO UPDATE SET
         href = excluded.href,
         etag = excluded.etag,
         ics = excluded.ics,
         updated_at = excluded.updated_at,
         start_ts = excluded.start_ts,
-        end_ts = excluded.end_ts
+        end_ts = excluded.end_ts,
+        search_text = excluded.search_text
     `)
     const deleteObject = this.db.prepare(
       'DELETE FROM objects WHERE user_key = ? AND calendar_id = ? AND href = ?',
@@ -226,6 +229,7 @@ export class SqliteCalendarStore implements CalendarStore {
           updatedAt: now,
           startTs: bounds?.startTs ?? null,
           endTs: bounds?.endTs ?? null,
+          searchText: extractSearchText(raw.ics),
         })
       }
       for (const href of result.deletedHrefs) {
@@ -259,6 +263,40 @@ export class SqliteCalendarStore implements CalendarStore {
     for (const row of rows) {
       try {
         results.push(...expandCalendarObject(row.ics, calendarId, row.href, row.etag, range))
+      } catch {
+        continue
+      }
+    }
+    return results
+  }
+
+  /**
+   * Full-history substring search over the cached objects. Freshens every
+   * calendar first (a cold cache pays one sync per calendar here; every
+   * later search is a single indexed-free column scan), then substring-
+   * matches the lowercased `search_text` blob. Returns the series master
+   * for each hit -- not per-occurrence -- so a weekly meeting is one
+   * result, not 200. The route sorts by start and caps.
+   */
+  async searchEvents(ctx: DavContext, query: string): Promise<CalendarObject[]> {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return []
+
+    const calendars = await this.discoverCalendars(ctx)
+    await Promise.all(calendars.map((cal) => this.ensureFresh(ctx, cal.id)))
+
+    const userKey = deriveUserKey(ctx)
+    const rows = this.db
+      .prepare<[string, string], { calendar_id: string; href: string; etag: string; ics: string }>(
+        `SELECT calendar_id, href, etag, ics FROM objects
+         WHERE user_key = ? AND search_text IS NOT NULL AND instr(search_text, ?) > 0`,
+      )
+      .all(userKey, needle)
+
+    const results: CalendarObject[] = []
+    for (const row of rows) {
+      try {
+        results.push(icsToCalendarObject(row.ics, row.calendar_id, row.href, row.etag))
       } catch {
         continue
       }
@@ -338,12 +376,23 @@ export class SqliteCalendarStore implements CalendarStore {
     const bounds = computeObjectBounds(ics)
     this.db
       .prepare(
-        `INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO objects (user_key, calendar_id, uid, href, etag, ics, updated_at, start_ts, end_ts, search_text)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_key, calendar_id, uid) DO UPDATE SET
            href = excluded.href, etag = excluded.etag, ics = excluded.ics, updated_at = excluded.updated_at,
-           start_ts = excluded.start_ts, end_ts = excluded.end_ts`,
+           start_ts = excluded.start_ts, end_ts = excluded.end_ts, search_text = excluded.search_text`,
       )
-      .run(userKey, calendarId, uid, href, etag, ics, Date.now(), bounds?.startTs ?? null, bounds?.endTs ?? null)
+      .run(
+        userKey,
+        calendarId,
+        uid,
+        href,
+        etag,
+        ics,
+        Date.now(),
+        bounds?.startTs ?? null,
+        bounds?.endTs ?? null,
+        extractSearchText(ics),
+      )
   }
 }
