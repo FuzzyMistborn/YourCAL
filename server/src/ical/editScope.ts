@@ -253,7 +253,10 @@ export function deleteThisOccurrence(ics: string, recurrenceId: string): string 
     if (rid && rid.compare(target) === 0) comp.removeSubcomponent(v)
   }
 
-  master.addPropertyWithValue('exdate', target)
+  // Build a fresh ICAL.Time for the EXDATE rather than reusing `target`,
+  // which the compare loop above holds -- no shared reference into the
+  // serialized component.
+  master.addPropertyWithValue('exdate', icalTimeFromIso(recurrenceId, masterIsAllDay(master)))
   return comp.toString()
 }
 

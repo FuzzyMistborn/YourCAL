@@ -111,6 +111,25 @@ describe('mapper round-trip', () => {
     expect(obj.rdate.map((d) => d.slice(0, 10))).toEqual(['2026-02-01', '2026-03-01', '2026-04-01'])
   })
 
+  it('ignores an unsupported RDATE;VALUE=PERIOD instead of throwing', () => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//test//EN',
+      'BEGIN:VEVENT',
+      'UID:period-rdate',
+      'DTSTAMP:20260101T000000Z',
+      'DTSTART:20260101T100000Z',
+      'DTEND:20260101T110000Z',
+      'RDATE;VALUE=PERIOD:20260201T100000Z/20260201T110000Z',
+      'RDATE:20260301T100000Z',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n')
+    const obj = icsToCalendarObject(ics, 'cal1', 'events/period-rdate.ics', '"etag1"')
+    expect(obj.rdate).toEqual(['2026-03-01T10:00:00.000Z'])
+  })
+
   it('preserves color', () => {
     const fields = baseFields({ color: '#ff0000' })
     const obj = roundTrip(fields)

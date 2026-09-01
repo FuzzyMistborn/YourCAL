@@ -38,9 +38,13 @@ function parseRdates(vevent: ICAL.Component): string[] {
   // A single RDATE property may carry several comma-separated values
   // (RDATE;VALUE=DATE:20260201,20260301,20260401) -- getFirstValue() would
   // keep only the first and silently drop the rest on the next save.
+  // Skip any non-DATE/DATE-TIME value (e.g. RDATE;VALUE=PERIOD): unsupported
+  // elsewhere in the mapper, and icalTimeToString would throw on it.
   return vevent
     .getAllProperties('rdate')
-    .flatMap((p) => (p.getValues() as ICAL.Time[]).map((value) => icalTimeToString(value)))
+    .flatMap((p) => p.getValues())
+    .filter((v): v is ICAL.Time => v instanceof ICAL.Time)
+    .map((value) => icalTimeToString(value))
 }
 
 export function buildCalendarObject(
