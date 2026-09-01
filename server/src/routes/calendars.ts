@@ -316,6 +316,35 @@ export async function calendarRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(created)
   })
 
+  // Re-create a CalDAV object from a full ICS blob, preserving the UID (and
+  // RRULE, EXDATEs, per-occurrence overrides) it carries. Backs the "Undo"
+  // on an event deletion: the client snapshots the raw ICS via the export
+  // route before deleting, then POSTs it back here. A fresh href/filename is
+  // fine -- same as the plain create path. The client is responsible for
+  // removing any object that still holds this UID (a 'this'/'thisAndFuture'
+  // delete only modifies the object in place) before calling this.
+  app.post<{ Params: { id: string; uid: string }; Body: { ics: string } }>(
+    '/:id/events/:uid/restore',
+    { bodyLimit: 5 * 1024 * 1024 },
+    async (req, reply) => {
+      const dav = requireSession(req, reply)
+      if (!dav) return
+      if (!(await requireWritableCalendar(dav, req.params.id, reply))) return
+
+      if (!req.body?.ics || typeof req.body.ics !== 'string') {
+        return reply.code(400).send({ error: 'bad_request', message: 'ics is required' })
+      }
+      try {
+        new ICAL.Component(ICAL.parse(req.body.ics))
+      } catch {
+        return reply.code(400).send({ error: 'bad_request', message: 'Could not parse ICS' })
+      }
+
+      const created = await store.createObject(dav, req.params.id, req.body.ics)
+      return reply.code(201).send(created)
+    },
+  )
+
   // ICS exports of a few thousand events run well past Fastify's default
   // 1MB body limit; without this a large but legitimate import 413s before
   // the handler (and its MAX_IMPORT_EVENTS cap) ever runs.
