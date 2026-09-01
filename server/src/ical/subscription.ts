@@ -11,8 +11,35 @@ import { registerEmbeddedTimezones } from './timezones.js'
 // per-feed) expensive across the whole request.
 const MAX_SUBSCRIPTION_EVENTS = 2000
 
-function normalizeUrl(url: string): string {
-  return url.startsWith('webcal://') ? `https://${url.slice('webcal://'.length)}` : url
+/**
+ * Canonicalises a subscription URL before it's fetched or hashed into a
+ * synthetic calendar id:
+ *  - webcal:// -> https://
+ *  - a Google Calendar "embed" link (calendar.google.com/calendar/embed?src=...,
+ *    which serves an HTML page and 404/401s when fetched as ICS) is rewritten
+ *    to its real iCal export URL.
+ * Anything already in ical form, or from another host, is returned unchanged.
+ */
+export function normalizeUrl(url: string): string {
+  const https = url.startsWith('webcal://') ? `https://${url.slice('webcal://'.length)}` : url
+
+  let parsed: URL
+  try {
+    parsed = new URL(https)
+  } catch {
+    return https
+  }
+
+  const host = parsed.hostname.toLowerCase()
+  const isGoogle = host === 'calendar.google.com' || host === 'www.google.com'
+  if (isGoogle && /\/calendar\/embed\/?$/.test(parsed.pathname)) {
+    const src = parsed.searchParams.get('src')
+    if (src) {
+      return `https://calendar.google.com/calendar/ical/${encodeURIComponent(src)}/public/basic.ics`
+    }
+  }
+
+  return https
 }
 
 export function subscriptionCalendarId(url: string): string {

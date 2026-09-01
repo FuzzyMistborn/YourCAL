@@ -21,6 +21,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'bad_request', message: 'start and end must be valid ISO dates' })
     }
 
+    // fetchSubscriptionEvents normalizes internally (webcal://, Google embed
+    // links); this parse is only a protocol sanity check on the raw input.
     let parsed: URL
     try {
       parsed = new URL(url.replace(/^webcal:\/\//, 'https://'))
