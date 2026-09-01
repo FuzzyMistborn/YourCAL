@@ -4,6 +4,7 @@ import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
 import { config } from './config.js'
 import { DisallowedHostError } from './dav/hostAllowlist.js'
+import { redactLogUrl } from './logRedaction.js'
 import { registerSession } from './session.js'
 import { sessionRoutes } from './routes/session.js'
 import { calendarRoutes } from './routes/calendars.js'
@@ -18,7 +19,25 @@ async function main(): Promise<void> {
   // this app's base64url-encoded calendar ids -- Radicale's shorter URLs
   // stayed under it by luck, but Baikal's longer `/dav.php/calendars/...`
   // paths exceed it, producing a 414 on every route with a real calendar id.
-  const app = Fastify({ logger: true, routerOptions: { maxParamLength: 500 } })
+  const app = Fastify({
+    // The default request serializer logs the full URL, query string and all.
+    // Subscription feed URLs carry a secret token in the query string, so
+    // override `req` to redact sensitive params before they're written out.
+    logger: {
+      serializers: {
+        req(req) {
+          return {
+            method: req.method,
+            url: redactLogUrl(req.url),
+            host: req.headers.host,
+            remoteAddress: req.ip,
+            remotePort: req.socket?.remotePort,
+          }
+        },
+      },
+    },
+    routerOptions: { maxParamLength: 500 },
+  })
 
   // A calendarId/href resolving to a different host than the authenticated
   // CalDAV server is a rejected SSRF attempt, not a server bug -- surface it
