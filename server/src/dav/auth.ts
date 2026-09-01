@@ -3,9 +3,6 @@ import type { DavContext } from './context.js'
 
 export type AuthMethod = 'Basic' | 'Digest'
 
-// Opt-in wire tracing for the auth handshake (set DAV_DEBUG=1).
-const DAV_DEBUG = process.env.DAV_DEBUG === '1' || process.env.DAV_DEBUG === 'true'
-
 export function basicAuthHeader(ctx: DavContext): Record<string, string> {
   return { Authorization: 'Basic ' + Buffer.from(`${ctx.username}:${ctx.password}`).toString('base64') }
 }
@@ -82,17 +79,21 @@ export function buildDigestHeader(
 // --- Scheme detection & the shared request wrapper -------------------------
 
 /**
- * Sends one unauthenticated PROPFIND at the CalDAV root and reads the
- * `WWW-Authenticate` challenge to decide how the app should authenticate.
- * Baikal (and other sabre/dav deployments) commonly offer only Digest;
- * when a server advertises Basic at all we prefer it (simpler, stateless).
+ * Sends unauthenticated PROPFINDs and reads the `WWW-Authenticate` challenge
+ * to decide how the app should authenticate. Baikal (and other sabre/dav
+ * deployments) commonly offer only Digest; when a server advertises Basic at
+ * all we prefer it (simpler, stateless). Falls back to Basic when nothing
+ * challenges.
+ *
+ * Tries `baseUrl` as given, then -- for setups that 404/405 a PROPFIND on
+ * the bare origin but publish the real endpoint via a redirect (Baikal
+ * behind nginx does exactly this) -- whatever `/.well-known/caldav` points
+ * at.
  *
  * The caller is responsible for host-allowlisting `baseUrl` first (the
  * login route does, via `assertHostAllowed`, before calling this).
  */
 export async function detectAuthMethod(baseUrl: string): Promise<AuthMethod> {
-  // A single unauthenticated PROPFIND; returns the status + challenge, or
-  // null on a network error.
   async function probe(url: string): Promise<{ status: number; wa: string; location: string | null }> {
     const res = await fetch(url, {
       method: 'PROPFIND',
@@ -112,38 +113,26 @@ export async function detectAuthMethod(baseUrl: string): Promise<AuthMethod> {
     return /\bDigest\b/i.test(wa) && !/\bBasic\b/i.test(wa) ? 'Digest' : 'Basic'
   }
 
-  // The URLs to try, in order: the server URL as given, then -- for setups
-  // that 404/405 a PROPFIND on the bare origin but publish the real endpoint
-  // via a redirect (Baikal behind nginx does exactly this) -- whatever
-  // /.well-known/caldav redirects to.
   const candidates = [baseUrl]
   try {
     const wk = await probe(new URL('/.well-known/caldav', baseUrl).href)
-    if (wk.status === 401) return debugDetect(baseUrl, wk.status, wk.wa, fromChallenge(wk.wa))
+    if (wk.status === 401) return fromChallenge(wk.wa)
     if (wk.status >= 300 && wk.status < 400 && wk.location) {
       candidates.push(new URL(wk.location, baseUrl).href)
     }
   } catch {
-    // ignore -- fall through to the plain probe
+    // ignore -- fall through to probing the candidate list
   }
 
   for (const url of candidates) {
     try {
       const r = await probe(url)
-      if (r.status === 401) return debugDetect(url, r.status, r.wa, fromChallenge(r.wa))
+      if (r.status === 401) return fromChallenge(r.wa)
     } catch {
       // try the next candidate
     }
   }
-  return debugDetect(baseUrl, 0, '', 'Basic')
-}
-
-function debugDetect(url: string, status: number, wa: string, decision: AuthMethod): AuthMethod {
-  if (DAV_DEBUG) {
-    // eslint-disable-next-line no-console
-    console.error(`[detectAuthMethod] ${url} status=${status} wwwAuth=${JSON.stringify(wa)} -> ${decision}`)
-  }
-  return decision
+  return 'Basic'
 }
 
 function targetUrl(input: string | URL | Request): string {
@@ -159,42 +148,23 @@ function withAuthHeader(init: RequestInit | undefined, authorization: string): R
 }
 
 // A bodyless copy of the request init, used to probe for the Digest
-// challenge. Sending the real request body on a call we expect to be 401'd
-// leaves undici's keep-alive connection in a state some proxies (nginx in
-// front of Baikal) mishandle, so the authenticated retry then reads a
-// truncated/empty response -- which surfaces in tsdav as
-// "cannot find principalUrl". The probe throws the body away; the real
-// (authenticated) request that follows carries it.
+// challenge: some servers reject or 500 an empty body, and there's no point
+// sending the real body on a request we expect to be 401'd. Only used for
+// methods where the body is optional (see davFetch).
 function withoutBody(init: RequestInit | undefined, method: string): RequestInit {
   return { method, headers: init?.headers, redirect: 'manual' }
 }
 
-// Logs every request the discovery flow makes and, for anything that isn't
-// a clean 2xx/401, a snippet of the response body -- enough to see why
-// tsdav's principal lookup fails without needing tsdav's own debug output.
-async function traceFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, init)
-  if (DAV_DEBUG) {
-    const method = init?.method ?? 'GET'
-    const u = typeof input === 'string' ? input : input.toString()
-    let extra = ''
-    if (res.status !== 401 && !(res.status >= 200 && res.status < 300)) {
-      const clone = res.clone()
-      const body = await clone.text().catch(() => '')
-      extra = ` ct=${res.headers.get('content-type') ?? '-'} body=${JSON.stringify(body.slice(0, 300))}`
-    }
-    // eslint-disable-next-line no-console
-    console.error(`[davFetch ${label}] ${method} ${u} -> ${res.status}${extra}`)
-  }
-  return res
-}
+// Methods where a request with no body is well-formed, so the Digest
+// challenge probe can skip sending one. REPORT/PROPPATCH/PUT/POST/... all
+// require a body (sabre 500s on an empty one).
+const BODY_OPTIONAL_METHODS = new Set(['PROPFIND', 'OPTIONS', 'GET', 'HEAD'])
 
 /**
  * Drop-in replacement for `fetch()` on every authenticated CalDAV request
- * (used directly by the raw sharing/PROPPATCH calls and wired in as
- * tsdav's `fetch` override). Basic just attaches the header; Digest does
- * the 401 challenge/response handshake, caching the negotiated challenge
- * per host and re-negotiating transparently when the nonce goes stale.
+ * (used directly by the raw sharing/PROPPATCH calls and wired in as tsdav's
+ * `fetch` override). Basic just attaches the header; Digest does the 401
+ * challenge/response handshake, negotiating a fresh challenge per request.
  */
 export async function davFetch(
   ctx: DavContext,
@@ -202,7 +172,7 @@ export async function davFetch(
   init?: RequestInit,
 ): Promise<Response> {
   if (ctx.authMethod !== 'Digest') {
-    return traceFetch('basic', input, withAuthHeader(init, basicAuthHeader(ctx).Authorization))
+    return fetch(input, withAuthHeader(init, basicAuthHeader(ctx).Authorization))
   }
 
   const url = targetUrl(input)
@@ -217,17 +187,19 @@ export async function davFetch(
   // into a 401 loop that never recovers. One extra round trip per request
   // is a fine price for a handshake that always works.
   let challenge: DigestChallenge | null = null
-  const probe = await traceFetch('probe', input, withoutBody(init, method))
-  if (probe.status === 401) {
-    challenge = parseDigestChallenge(probe.headers.get('www-authenticate') ?? '')
+
+  if (BODY_OPTIONAL_METHODS.has(method)) {
+    const probe = await fetch(input, withoutBody(init, method))
+    if (probe.status === 401) {
+      challenge = parseDigestChallenge(probe.headers.get('www-authenticate') ?? '')
+    }
+    await probe.body?.cancel().catch(() => {})
   }
-  await probe.body?.cancel().catch(() => {})
 
   if (!challenge) {
-    // The probe wasn't challenged (no auth needed, a redirect, or an error).
-    // Fall back to the plain request; if that turns out to be challenged,
-    // negotiate from its response.
-    const res = await traceFetch('plain', input, init)
+    // No challenge yet (a body-required method, or the probe wasn't 401'd):
+    // send the real request unauthenticated and negotiate from its response.
+    const res = await fetch(input, init)
     if (res.status !== 401) return res
     challenge = parseDigestChallenge(res.headers.get('www-authenticate') ?? '')
     if (!challenge) return res
@@ -236,14 +208,5 @@ export async function davFetch(
 
   const cnonce = randomBytes(16).toString('hex')
   const header = buildDigestHeader(ctx, { method, uri, challenge, nc: 1, cnonce })
-  if (DAV_DEBUG) {
-    const H = hashFor(challenge.algorithm)
-    // eslint-disable-next-line no-console
-    console.error(
-      `[davFetch digest] uri=${uri} user=${JSON.stringify(ctx.username)} realm=${JSON.stringify(challenge.realm)}` +
-        ` qop=${challenge.qop ?? '-'} algo=${challenge.algorithm ?? '-'}` +
-        ` a1=${H(`${ctx.username}:${challenge.realm}:${ctx.password}`).slice(0, 8)}… passLen=${ctx.password.length}`,
-    )
-  }
-  return traceFetch('auth', input, withAuthHeader(init, header))
+  return fetch(input, withAuthHeader(init, header))
 }
