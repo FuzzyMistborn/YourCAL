@@ -179,7 +179,16 @@ describe('all-day recurrence IDs are server-timezone independent', () => {
     process.env.TZ = originalTz
   })
 
-  for (const tz of ['UTC', 'Europe/London', 'America/New_York']) {
+  // Spread of offsets: UTC, west of UTC, east of UTC, the extreme ends
+  // (Niue -11, Kiritimati +14), and a sub-hour offset (Kolkata +05:30).
+  for (const tz of [
+    'UTC',
+    'Europe/London',
+    'America/New_York',
+    'Pacific/Niue',
+    'Pacific/Kiritimati',
+    'Asia/Kolkata',
+  ]) {
     it(`expands an all-day series to bare-date recurrence IDs under TZ=${tz}`, () => {
       process.env.TZ = tz
       const occ = expand(allDayWeekly())
@@ -215,6 +224,22 @@ describe('all-day recurrence IDs are server-timezone independent', () => {
       const moved = expand(result).find((o) => o.summary === 'Moved')
       expect(moved?.recurrenceId).toBe('2026-03-17')
       expect(moved?.start.slice(0, 10)).toBe('2026-03-18')
+    })
+
+    it(`accepts a legacy full-ISO recurrenceId for an all-day series under TZ=${tz}`, () => {
+      process.env.TZ = tz
+      // A client cached from before the bare-date change still sends the
+      // occurrence as a UTC-midnight instant -- icalTimeFromIso slices the
+      // date portion, so it must still match.
+      const result = deleteThisOccurrence(allDayWeekly(), '2026-03-17T00:00:00.000Z')
+      expect(result).toContain('EXDATE;VALUE=DATE:20260317')
+      expect(expand(result).map((o) => o.recurrenceId)).toEqual(['2026-03-10', '2026-03-24', '2026-03-31'])
+    })
+
+    it(`splits an all-day series at the intended date under TZ=${tz}`, () => {
+      process.env.TZ = tz
+      const result = deleteThisAndFuture(allDayWeekly(), '2026-03-24')
+      expect(expand(result).map((o) => o.recurrenceId)).toEqual(['2026-03-10', '2026-03-17'])
     })
   }
 })
