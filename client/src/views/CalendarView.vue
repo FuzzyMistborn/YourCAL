@@ -368,7 +368,14 @@ function onSelect(arg: DateSelectArg): void {
   // A double-click just navigated to the day view; don't also open create.
   if (Date.now() - lastNavTs < DOUBLE_CLICK_MS + 100) return
 
-  const slot = { start: arg.start.toISOString(), end: arg.end.toISOString(), allDay: arg.allDay }
+  // For an all-day selection FullCalendar's `start`/`end` are local midnight;
+  // toISOString() then rolls them to the previous calendar day in any
+  // positive-offset zone (e.g. BST: 2026-09-01 00:00 -> 2026-08-31T23:00Z).
+  // `startStr`/`endStr` are already the bare YYYY-MM-DD the dialog wants --
+  // the same rollover `dropDateString()` avoids for all-day drag/drop.
+  const slot = arg.allDay
+    ? { start: arg.startStr, end: arg.endStr, allDay: true }
+    : { start: arg.start.toISOString(), end: arg.end.toISOString(), allDay: false }
   cancelPendingCreate()
   pendingCreateTimer = setTimeout(() => {
     pendingCreateTimer = undefined
