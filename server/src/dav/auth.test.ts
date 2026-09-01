@@ -102,11 +102,18 @@ describe('davFetch', () => {
       )
       .mockResolvedValueOnce(new Response('ok', { status: 200 }))
 
-    const res = await davFetch(ctx, 'https://d1.example.com/dav/cal/', { method: 'PROPFIND' })
+    const res = await davFetch(ctx, 'https://d1.example.com/dav/cal/', {
+      method: 'PROPFIND',
+      body: '<propfind/>',
+    })
 
     expect(res.status).toBe(200)
     expect(fetch).toHaveBeenCalledTimes(2)
+    // The challenge probe must not carry the request body.
+    const [, probeInit] = vi.mocked(fetch).mock.calls[0]
+    expect(probeInit?.body).toBeUndefined()
     const [, retryInit] = vi.mocked(fetch).mock.calls[1]
+    expect((retryInit as { body?: unknown })?.body).toBe('<propfind/>')
     const auth = new Headers(retryInit?.headers).get('Authorization') ?? ''
     expect(auth).toMatch(/^Digest /)
     expect(auth).toContain('nc=00000001')

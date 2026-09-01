@@ -127,6 +127,17 @@ function withAuthHeader(init: RequestInit | undefined, authorization: string): R
   return { ...init, headers }
 }
 
+// A bodyless copy of the request init, used to probe for the Digest
+// challenge. Sending the real request body on a call we expect to be 401'd
+// leaves undici's keep-alive connection in a state some proxies (nginx in
+// front of Baikal) mishandle, so the authenticated retry then reads a
+// truncated/empty response -- which surfaces in tsdav as
+// "cannot find principalUrl". The probe throws the body away; the real
+// (authenticated) request that follows carries it.
+function withoutBody(init: RequestInit | undefined, method: string): RequestInit {
+  return { method, headers: init?.headers, redirect: 'manual' }
+}
+
 /**
  * Drop-in replacement for `fetch()` on every authenticated CalDAV request
  * (used directly by the raw sharing/PROPPATCH calls and wired in as
@@ -149,27 +160,48 @@ export async function davFetch(
   const uri = parsed.pathname + parsed.search
   const key = `${parsed.origin}\n${ctx.username}`
 
-  // First attempt: reuse a cached challenge if we have one, otherwise send
-  // unauthenticated and let the 401 carry the challenge.
+  const send = (challenge: DigestChallenge, nc: number, cnonce: string): Promise<Response> =>
+    fetch(input, withAuthHeader(init, buildDigestHeader(ctx, { method, uri, challenge, nc, cnonce })))
+
+  // Fast path: reuse a previously negotiated challenge (sabre/dav validates
+  // the response purely by hash, so the same nonce works for many requests
+  // with an increasing `nc`). Only re-negotiate if it's gone stale.
   const cached = challengeCache.get(key)
-  let res: Response
   if (cached) {
     cached.nc += 1
-    const header = buildDigestHeader(ctx, { method, uri, challenge: cached.challenge, nc: cached.nc, cnonce: cached.cnonce })
-    res = await fetch(input, withAuthHeader(init, header))
-  } else {
-    res = await fetch(input, init)
+    const res = await send(cached.challenge, cached.nc, cached.cnonce)
+    if (res.status !== 401) return res
+    // Nonce went stale: the 401 carries a fresh challenge -- use it directly.
+    const stale = parseDigestChallenge(res.headers.get('www-authenticate') ?? '')
+    await res.body?.cancel().catch(() => {})
+    challengeCache.delete(key)
+    if (stale) {
+      const entry: CachedChallenge = { challenge: stale, cnonce: randomBytes(16).toString('hex'), nc: 1 }
+      challengeCache.set(key, entry)
+      return send(stale, 1, entry.cnonce)
+    }
   }
-  if (res.status !== 401) return res
 
-  const wa = res.headers.get('www-authenticate') ?? ''
-  const challenge = parseDigestChallenge(wa)
-  if (!challenge) return res
-  await res.body?.cancel().catch(() => {})
+  // Probe for a fresh challenge with a bodyless request (see withoutBody).
+  let challenge: DigestChallenge | null = null
+  const probe = await fetch(input, withoutBody(init, method))
+  if (probe.status === 401) {
+    challenge = parseDigestChallenge(probe.headers.get('www-authenticate') ?? '')
+  }
+  await probe.body?.cancel().catch(() => {})
 
-  // Fresh (or stale-refreshed) challenge -> recompute from nc=1 and retry once.
+  if (!challenge) {
+    // The probe wasn't challenged (no auth needed, a redirect, or an error).
+    // Fall back to the plain request; if that turns out to be challenged,
+    // negotiate from its response.
+    const res = await fetch(input, init)
+    if (res.status !== 401) return res
+    challenge = parseDigestChallenge(res.headers.get('www-authenticate') ?? '')
+    if (!challenge) return res
+    await res.body?.cancel().catch(() => {})
+  }
+
   const entry: CachedChallenge = { challenge, cnonce: randomBytes(16).toString('hex'), nc: 1 }
   challengeCache.set(key, entry)
-  const header = buildDigestHeader(ctx, { method, uri, challenge, nc: 1, cnonce: entry.cnonce })
-  return fetch(input, withAuthHeader(init, header))
+  return send(challenge, 1, entry.cnonce)
 }
