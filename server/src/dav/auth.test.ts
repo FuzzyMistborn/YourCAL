@@ -70,6 +70,20 @@ describe('detectAuthMethod', () => {
     vi.mocked(fetch).mockResolvedValue(new Response('', { status: 207 }))
     expect(await detectAuthMethod('https://caldav.example.com/dav/')).toBe('Basic')
   })
+
+  it('follows a /.well-known/caldav redirect to find the Digest endpoint (Baikal behind nginx)', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/caldav')) {
+        return new Response('', { status: 302, headers: { location: '/dav.php/' } })
+      }
+      if (url.endsWith('/dav.php/')) {
+        return new Response('', { status: 401, headers: { 'www-authenticate': 'Digest realm="BaikalDAV", nonce="n"' } })
+      }
+      return new Response('405', { status: 405 }) // nginx rejects PROPFIND on the bare origin
+    })
+    expect(await detectAuthMethod('http://192.168.50.20:8120')).toBe('Digest')
+  })
 })
 
 describe('davFetch', () => {
