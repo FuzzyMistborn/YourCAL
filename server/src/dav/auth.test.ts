@@ -134,39 +134,31 @@ describe('davFetch', () => {
     expect(auth).toContain('uri="/dav/cal/"')
   })
 
-  it('reuses a cached challenge on the next call and bumps nc, re-negotiating only on a stale 401', async () => {
+  it('negotiates a fresh challenge on every call (no cross-call nonce reuse)', async () => {
     const ctx: DavContext = {
       baseUrl: 'https://d2.example.com/',
       username: 'alice',
       password: 'secret',
       authMethod: 'Digest',
     }
-    // First call: negotiate.
+    const challenge = (nonce: string): Response =>
+      new Response('', { status: 401, headers: { 'www-authenticate': `Digest realm="R", nonce="${nonce}", qop="auth"` } })
+
     vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response('', { status: 401, headers: { 'www-authenticate': 'Digest realm="R", nonce="N1", qop="auth"' } }),
-      )
-      .mockResolvedValueOnce(new Response('ok', { status: 200 }))
+      .mockResolvedValueOnce(challenge('N1')) // call A: probe
+      .mockResolvedValueOnce(new Response('ok', { status: 200 })) // call A: auth
+      .mockResolvedValueOnce(challenge('N2')) // call B: probe
+      .mockResolvedValueOnce(new Response('ok', { status: 200 })) // call B: auth
+
     await davFetch(ctx, 'https://d2.example.com/a/', { method: 'PROPFIND' })
-
-    // Second call: cached challenge used directly (one request), nc advances.
-    vi.mocked(fetch).mockResolvedValueOnce(new Response('ok', { status: 200 }))
     await davFetch(ctx, 'https://d2.example.com/b/', { method: 'PROPFIND' })
-    const [, secondInit] = vi.mocked(fetch).mock.calls[2]
-    expect(new Headers(secondInit?.headers).get('Authorization')).toContain('nc=00000002')
 
-    // Third call: server says the nonce is stale -> one retry with the new challenge.
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response('', {
-          status: 401,
-          headers: { 'www-authenticate': 'Digest realm="R", nonce="N2", qop="auth", stale=true' },
-        }),
-      )
-      .mockResolvedValueOnce(new Response('ok', { status: 200 }))
-    const res = await davFetch(ctx, 'https://d2.example.com/c/', { method: 'PROPFIND' })
-    expect(res.status).toBe(200)
-    const lastCall = vi.mocked(fetch).mock.calls.at(-1)!
-    expect(new Headers(lastCall[1]?.headers).get('Authorization')).toContain('nonce="N2"')
+    expect(fetch).toHaveBeenCalledTimes(4)
+    const authA = new Headers(vi.mocked(fetch).mock.calls[1][1]?.headers).get('Authorization') ?? ''
+    const authB = new Headers(vi.mocked(fetch).mock.calls[3][1]?.headers).get('Authorization') ?? ''
+    expect(authA).toContain('nonce="N1"')
+    expect(authA).toContain('nc=00000001')
+    expect(authB).toContain('nonce="N2"')
+    expect(authB).toContain('nc=00000001')
   })
 })
