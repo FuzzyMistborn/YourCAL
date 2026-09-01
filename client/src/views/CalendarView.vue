@@ -516,6 +516,22 @@ function dropDateString(d: Date | null, allDay: boolean, fallback: string): stri
   return allDay ? (DateTime.fromJSDate(d).toISODate() ?? fallback) : d.toISOString()
 }
 
+// A drop moves an event by `delta` (a FullCalendar Duration). Applying that
+// delta to the event's *original* start/end keeps its duration intact. This
+// matters for all-day events: FullCalendar reports no `end` for a single-day
+// all-day event and an exclusive `end` otherwise, so deriving the new end
+// from `arg.event` alone collapses multi-day spans (and turns single-day
+// ones into a zero-length / previous-day event).
+function shiftAllDay(iso: string, delta: EventDropArg['delta']): string {
+  const moved = DateTime.fromISO(iso).plus({
+    years: delta.years ?? 0,
+    months: delta.months ?? 0,
+    days: delta.days ?? 0,
+    milliseconds: delta.milliseconds ?? 0,
+  })
+  return moved.toISODate() ?? iso.slice(0, 10)
+}
+
 function toFields(event: CalendarObject, start: string, end: string): EventFields {
   return {
     summary: event.summary,
@@ -565,8 +581,15 @@ async function onEventDrop(arg: EventDropArg): Promise<void> {
     errorBanner.value = 'Drag-and-drop is not yet supported for recurring events -- use the edit dialog.'
     return
   }
-  const start = dropDateString(arg.event.start, event.allDay, event.start)
-  const end = dropDateString(arg.event.end ?? arg.event.start, event.allDay, event.end)
+  let start: string
+  let end: string
+  if (event.allDay) {
+    start = shiftAllDay(event.start, arg.delta)
+    end = shiftAllDay(event.end, arg.delta)
+  } else {
+    start = dropDateString(arg.event.start, false, event.start)
+    end = dropDateString(arg.event.end ?? arg.event.start, false, event.end)
+  }
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
       href: event.href,
@@ -591,7 +614,14 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
     return
   }
   const start = dropDateString(arg.event.start, event.allDay, event.start)
-  const end = dropDateString(arg.event.end ?? arg.event.start, event.allDay, event.end)
+  // For an all-day event with no reported end (single-day), the exclusive
+  // DTEND is the day after the start, not the start itself.
+  const endDate =
+    arg.event.end ??
+    (event.allDay && arg.event.start
+      ? DateTime.fromJSDate(arg.event.start).plus({ days: 1 }).toJSDate()
+      : arg.event.start)
+  const end = dropDateString(endDate, event.allDay, event.end)
   try {
     await eventsStore.updateEvent(event.calendarId, event.uid, {
       href: event.href,
