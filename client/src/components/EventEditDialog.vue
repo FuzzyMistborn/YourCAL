@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AlarmFields, Calendar, CalendarObject, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useSessionStore } from '../stores/session.js'
 import TimeCombobox from './TimeCombobox.vue'
 
@@ -312,13 +312,43 @@ const isEditing = computed(() => props.event !== null)
 // to be there -- for an event that was created as all-day, that's 00:00 for
 // both, an instantly-invalid zero-length range once time fields reappear.
 // Reset to a sensible default hour block instead.
+let suppressDurationSync = false
 watch(
   () => form.allDay,
   (allDay, wasAllDay) => {
     if (wasAllDay && !allDay) {
+      // Don't let the duration-sync watch below react to these writes.
+      suppressDurationSync = true
       form.startTime = '00:00'
       form.endTime = '01:00'
+      void nextTick(() => {
+        suppressDurationSync = false
+      })
     }
+  },
+)
+
+// Keep the event's length constant when the start changes: shift the end by
+// the same amount, like every other calendar app. Skipped while a field is
+// mid-edit / unparseable.
+watch(
+  () => [form.startDate, form.startTime] as const,
+  ([newDate, newTime], [oldDate, oldTime]) => {
+    if (suppressDurationSync || (newDate === oldDate && newTime === oldTime)) return
+
+    const parse = (d: string, t: string): DateTime =>
+      form.allDay
+        ? DateTime.fromFormat(d, 'yyyy-LL-dd')
+        : DateTime.fromFormat(`${d} ${t}`, 'yyyy-LL-dd HH:mm', { zone: form.timezone })
+
+    const oldStart = parse(oldDate, oldTime)
+    const newStart = parse(newDate, newTime)
+    const oldEnd = parse(form.endDate, form.endTime)
+    if (!oldStart.isValid || !newStart.isValid || !oldEnd.isValid) return
+
+    const newEnd = oldEnd.plus(newStart.diff(oldStart))
+    form.endDate = newEnd.toFormat('yyyy-LL-dd')
+    if (!form.allDay) form.endTime = newEnd.toFormat('HH:mm')
   },
 )
 
