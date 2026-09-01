@@ -128,7 +128,7 @@ describe('GET /api/search', () => {
     })
   })
 
-  it('caps results at MAX_RESULTS (100)', async () => {
+  it('caps results at MAX_RESULTS (25)', async () => {
     storeMock.discoverCalendars.mockResolvedValue([calendar('cal1')])
     const many = Array.from({ length: 150 }, (_, i) =>
       event({ uid: `uid-${i}`, summary: 'Standup', start: new Date(2026, 0, 1 + i).toISOString() }),
@@ -136,7 +136,7 @@ describe('GET /api/search', () => {
     storeMock.getEvents.mockResolvedValue(many)
     const app = await buildApp()
     const res = await app.inject({ method: 'GET', url: '/api/search?q=standup' })
-    expect((res.json() as CalendarObject[])).toHaveLength(100)
+    expect((res.json() as CalendarObject[])).toHaveLength(25)
   })
 
   describe('when the store exposes a search index (searchEvents)', () => {
@@ -153,11 +153,11 @@ describe('GET /api/search', () => {
       const res = await app.inject({ method: 'GET', url: '/api/search?q=standup' })
 
       const results = res.json() as CalendarObject[]
-      expect(results).toHaveLength(100)
+      expect(results).toHaveLength(25)
       expect(storeMock.searchEvents).toHaveBeenCalledWith(dav, 'standup')
       expect(storeMock.discoverCalendars).not.toHaveBeenCalled()
       expect(storeMock.getEvents).not.toHaveBeenCalled()
-      expect(results[0].start < results[99].start).toBe(true)
+      expect(results[0].start < results[24].start).toBe(true)
     })
   })
 })

@@ -9,7 +9,7 @@ function invalidDate(value: string | undefined): boolean {
 
 const DEFAULT_WINDOW_PAST_DAYS = 365
 const DEFAULT_WINDOW_FUTURE_DAYS = 730
-const MAX_RESULTS = 100
+const MAX_RESULTS = 25
 
 function matches(event: CalendarObject, needle: string): boolean {
   return (

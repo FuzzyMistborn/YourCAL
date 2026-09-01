@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const safeFetchExternal = vi.fn()
 vi.mock('../dav/ssrf.js', () => ({ safeFetchExternal: (...args: unknown[]) => safeFetchExternal(...args) }))
 
-const { fetchSubscriptionEvents, subscriptionCalendarId } = await import('./subscription.js')
+const { fetchSubscriptionEvents, subscriptionCalendarId, normalizeUrl } = await import('./subscription.js')
 
 const wideRange = { start: '2020-01-01T00:00:00.000Z', end: '2030-01-01T00:00:00.000Z' }
 
@@ -39,6 +39,32 @@ describe('subscriptionCalendarId', () => {
 
   it('differs for different URLs', () => {
     expect(subscriptionCalendarId('https://example.com/a.ics')).not.toBe(subscriptionCalendarId('https://example.com/b.ics'))
+  })
+})
+
+describe('normalizeUrl', () => {
+  it('rewrites webcal:// to https://', () => {
+    expect(normalizeUrl('webcal://example.com/feed.ics')).toBe('https://example.com/feed.ics')
+  })
+
+  it('rewrites a Google Calendar embed URL to its iCal export URL', () => {
+    const src = 'abc123@group.calendar.google.com'
+    expect(
+      normalizeUrl(`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(src)}&ctz=America%2FNew_York`),
+    ).toBe(`https://calendar.google.com/calendar/ical/${encodeURIComponent(src)}/public/basic.ics`)
+  })
+
+  it('leaves an already-correct Google iCal URL unchanged', () => {
+    const ical = 'https://calendar.google.com/calendar/ical/abc123%40group.calendar.google.com/public/basic.ics'
+    expect(normalizeUrl(ical)).toBe(ical)
+  })
+
+  it('leaves unrelated URLs unchanged', () => {
+    expect(normalizeUrl('https://example.com/feed.ics')).toBe('https://example.com/feed.ics')
+  })
+
+  it('returns the input unchanged when it is not a valid URL', () => {
+    expect(normalizeUrl('not a url')).toBe('not a url')
   })
 })
 
