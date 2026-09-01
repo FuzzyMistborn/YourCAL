@@ -150,18 +150,45 @@ export const useEventsStore = defineStore('events', () => {
     await reloadLastRange(changed)
   }
 
-  async function deleteEvent(calendarId: string, uid: string, input: DeleteEventInput): Promise<void> {
-    await api.deleteEvent(calendarId, uid, input)
+  // A partial ('this' / 'thisAndFuture') delete rewrites the series object
+  // in place and the route returns it with a fresh href/etag; a full
+  // ('all') delete removes the object and returns nothing. The remaining
+  // object is handed back so an Undo can target it directly.
+  async function deleteEvent(
+    calendarId: string,
+    uid: string,
+    input: DeleteEventInput,
+  ): Promise<CalendarObject | undefined> {
+    const remaining = await api.deleteEvent(calendarId, uid, input)
     await reloadLastRange([calendarId])
+    return remaining ?? undefined
   }
 
   // Undo a deletion by re-creating the object from a raw-ICS snapshot taken
   // before the delete. A 'this'/'thisAndFuture' delete only modifies the
   // object in place, so if one still holds this UID, remove it first --
   // otherwise the calendar would end up with two objects sharing the UID.
-  async function restoreEvent(calendarId: string, uid: string, ics: string): Promise<void> {
+  // `remaining` is that modified series, as returned by deleteEvent. The
+  // findEvent fallback is best-effort only: expanded recurring occurrences
+  // all carry a non-null recurrenceId, so a null-recurrenceId lookup for
+  // the leftover series misses -- which is exactly the case `remaining`
+  // exists to cover.
+  async function restoreEvent(
+    calendarId: string,
+    uid: string,
+    ics: string,
+    remaining?: Pick<CalendarObject, 'href' | 'etag'>,
+  ): Promise<void> {
     await reloadLastRange([calendarId])
-    const existing = findEvent(calendarId, uid, null)
+    // Prefer the freshest etag the reloaded cache has for this object
+    // (keyed by href, since every expanded occurrence shares the series
+    // object's href/etag); fall back to the delete's return value.
+    const cached = remaining
+      ? Object.values(byRange.value)
+          .flat()
+          .find((e) => e.calendarId === calendarId && e.href === remaining.href)
+      : undefined
+    const existing = cached ?? remaining ?? findEvent(calendarId, uid, null)
     if (existing) {
       await api.deleteEvent(calendarId, uid, {
         href: existing.href,
