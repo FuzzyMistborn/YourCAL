@@ -1,5 +1,5 @@
 import type { EventFields } from '@yourcal/shared'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   applyAll,
   applyThisAndFuture,
@@ -160,6 +160,63 @@ describe('deleteThisOccurrence', () => {
     expect(occurrences.some((o) => o.recurrenceId === recurrenceId)).toBe(false)
     expect(occurrences.some((o) => o.summary === 'Standup (special)')).toBe(false)
   })
+})
+
+describe('all-day recurrence IDs are server-timezone independent', () => {
+  const allDayWeekly = () =>
+    calendarObjectToIcs(
+      'uid-allday',
+      baseFields({
+        allDay: true,
+        start: '2026-03-10T00:00:00.000Z',
+        end: '2026-03-11T00:00:00.000Z',
+        rrule: 'FREQ=WEEKLY;COUNT=4',
+      }),
+    )
+
+  const originalTz = process.env.TZ
+  afterEach(() => {
+    process.env.TZ = originalTz
+  })
+
+  for (const tz of ['UTC', 'Europe/London', 'America/New_York']) {
+    it(`expands an all-day series to bare-date recurrence IDs under TZ=${tz}`, () => {
+      process.env.TZ = tz
+      const occ = expand(allDayWeekly())
+      expect(occ.map((o) => o.recurrenceId)).toEqual([
+        '2026-03-10',
+        '2026-03-17',
+        '2026-03-24',
+        '2026-03-31',
+      ])
+    })
+
+    it(`EXDATEs the intended all-day date under TZ=${tz}`, () => {
+      process.env.TZ = tz
+      const result = deleteThisOccurrence(allDayWeekly(), '2026-03-17')
+      expect(result).toContain('EXDATE;VALUE=DATE:20260317')
+      const occ = expand(result)
+      expect(occ.map((o) => o.recurrenceId)).toEqual(['2026-03-10', '2026-03-24', '2026-03-31'])
+    })
+
+    it(`overrides the intended all-day occurrence under TZ=${tz}`, () => {
+      process.env.TZ = tz
+      const result = applyThisOccurrence(
+        allDayWeekly(),
+        '2026-03-17',
+        baseFields({
+          summary: 'Moved',
+          allDay: true,
+          start: '2026-03-18T00:00:00.000Z',
+          end: '2026-03-19T00:00:00.000Z',
+          rrule: null,
+        }),
+      )
+      const moved = expand(result).find((o) => o.summary === 'Moved')
+      expect(moved?.recurrenceId).toBe('2026-03-17')
+      expect(moved?.start.slice(0, 10)).toBe('2026-03-18')
+    })
+  }
 })
 
 describe('deleteThisAndFuture', () => {

@@ -92,6 +92,25 @@ describe('mapper round-trip', () => {
     expect(obj.rdate[0].slice(0, 10)).toBe('2026-04-01')
   })
 
+  it('flattens multiple values carried in a single RDATE property', () => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//test//EN',
+      'BEGIN:VEVENT',
+      'UID:multi-rdate',
+      'DTSTAMP:20260101T000000Z',
+      'DTSTART;VALUE=DATE:20260101',
+      'DTEND;VALUE=DATE:20260102',
+      'RRULE:FREQ=YEARLY;COUNT=2',
+      'RDATE;VALUE=DATE:20260201,20260301,20260401',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n')
+    const obj = icsToCalendarObject(ics, 'cal1', 'events/multi-rdate.ics', '"etag1"')
+    expect(obj.rdate.map((d) => d.slice(0, 10))).toEqual(['2026-02-01', '2026-03-01', '2026-04-01'])
+  })
+
   it('preserves color', () => {
     const fields = baseFields({ color: '#ff0000' })
     const obj = roundTrip(fields)

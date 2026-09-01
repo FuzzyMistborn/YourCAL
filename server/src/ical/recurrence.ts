@@ -1,6 +1,6 @@
 import type { CalendarObject, TimeRange } from '@yourcal/shared'
 import ICAL from 'ical.js'
-import { buildCalendarObject } from './mapper.js'
+import { buildCalendarObject, icalTimeToString } from './mapper.js'
 import { registerEmbeddedTimezones } from './timezones.js'
 
 // Safety cap on the number of *in-range* occurrences we'll materialize for
@@ -103,7 +103,13 @@ export function expandCalendarObject(
         href,
         start: details.startDate,
         end: details.endDate,
-        recurrenceId: details.recurrenceId.toJSDate().toISOString(),
+        // For an all-day series details.recurrenceId is DATE-typed;
+        // toJSDate().toISOString() would apply the server process's UTC
+        // offset and, under a non-UTC TZ, shift it to the adjacent day
+        // (editScope then slices the first 10 chars and EXDATEs/overrides
+        // the wrong date). icalTimeToString emits a bare YYYY-MM-DD for
+        // DATE values and an ISO instant only for timed ones.
+        recurrenceId: icalTimeToString(details.recurrenceId),
         isRecurring: true,
         rrule: masterRrule,
       }),
