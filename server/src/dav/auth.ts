@@ -3,6 +3,9 @@ import type { DavContext } from './context.js'
 
 export type AuthMethod = 'Basic' | 'Digest'
 
+// Opt-in wire tracing for the auth handshake (set DAV_DEBUG=1).
+const DAV_DEBUG = process.env.DAV_DEBUG === '1' || process.env.DAV_DEBUG === 'true'
+
 export function basicAuthHeader(ctx: DavContext): Record<string, string> {
   return { Authorization: 'Basic ' + Buffer.from(`${ctx.username}:${ctx.password}`).toString('base64') }
 }
@@ -109,10 +112,14 @@ export async function detectAuthMethod(baseUrl: string): Promise<AuthMethod> {
   } catch {
     return 'Basic'
   }
-  if (res.status !== 401) return 'Basic'
   const wa = res.headers.get('www-authenticate') ?? ''
-  if (/\bDigest\b/i.test(wa) && !/\bBasic\b/i.test(wa)) return 'Digest'
-  return 'Basic'
+  const decision: AuthMethod =
+    res.status === 401 && /\bDigest\b/i.test(wa) && !/\bBasic\b/i.test(wa) ? 'Digest' : 'Basic'
+  if (DAV_DEBUG) {
+    // eslint-disable-next-line no-console
+    console.error(`[detectAuthMethod] ${baseUrl} status=${res.status} wwwAuth=${JSON.stringify(wa)} -> ${decision}`)
+  }
+  return decision
 }
 
 function targetUrl(input: string | URL | Request): string {
@@ -138,6 +145,26 @@ function withoutBody(init: RequestInit | undefined, method: string): RequestInit
   return { method, headers: init?.headers, redirect: 'manual' }
 }
 
+// Logs every request the discovery flow makes and, for anything that isn't
+// a clean 2xx/401, a snippet of the response body -- enough to see why
+// tsdav's principal lookup fails without needing tsdav's own debug output.
+async function traceFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init)
+  if (DAV_DEBUG) {
+    const method = init?.method ?? 'GET'
+    const u = typeof input === 'string' ? input : input.toString()
+    let extra = ''
+    if (res.status !== 401 && !(res.status >= 200 && res.status < 300)) {
+      const clone = res.clone()
+      const body = await clone.text().catch(() => '')
+      extra = ` ct=${res.headers.get('content-type') ?? '-'} body=${JSON.stringify(body.slice(0, 300))}`
+    }
+    // eslint-disable-next-line no-console
+    console.error(`[davFetch ${label}] ${method} ${u} -> ${res.status}${extra}`)
+  }
+  return res
+}
+
 /**
  * Drop-in replacement for `fetch()` on every authenticated CalDAV request
  * (used directly by the raw sharing/PROPPATCH calls and wired in as
@@ -151,7 +178,7 @@ export async function davFetch(
   init?: RequestInit,
 ): Promise<Response> {
   if (ctx.authMethod !== 'Digest') {
-    return fetch(input, withAuthHeader(init, basicAuthHeader(ctx).Authorization))
+    return traceFetch('basic', input, withAuthHeader(init, basicAuthHeader(ctx).Authorization))
   }
 
   const url = targetUrl(input)
@@ -161,7 +188,7 @@ export async function davFetch(
   const key = `${parsed.origin}\n${ctx.username}`
 
   const send = (challenge: DigestChallenge, nc: number, cnonce: string): Promise<Response> =>
-    fetch(input, withAuthHeader(init, buildDigestHeader(ctx, { method, uri, challenge, nc, cnonce })))
+    traceFetch('auth', input, withAuthHeader(init, buildDigestHeader(ctx, { method, uri, challenge, nc, cnonce })))
 
   // Fast path: reuse a previously negotiated challenge (sabre/dav validates
   // the response purely by hash, so the same nonce works for many requests
@@ -184,7 +211,7 @@ export async function davFetch(
 
   // Probe for a fresh challenge with a bodyless request (see withoutBody).
   let challenge: DigestChallenge | null = null
-  const probe = await fetch(input, withoutBody(init, method))
+  const probe = await traceFetch('probe', input, withoutBody(init, method))
   if (probe.status === 401) {
     challenge = parseDigestChallenge(probe.headers.get('www-authenticate') ?? '')
   }
@@ -194,7 +221,7 @@ export async function davFetch(
     // The probe wasn't challenged (no auth needed, a redirect, or an error).
     // Fall back to the plain request; if that turns out to be challenged,
     // negotiate from its response.
-    const res = await fetch(input, init)
+    const res = await traceFetch('plain', input, init)
     if (res.status !== 401) return res
     challenge = parseDigestChallenge(res.headers.get('www-authenticate') ?? '')
     if (!challenge) return res
