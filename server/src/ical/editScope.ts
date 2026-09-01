@@ -71,10 +71,14 @@ export function applyThisOccurrence(ics: string, recurrenceId: string, fields: E
   const comp = parseCalendar(ics)
   const master = getMaster(comp)
   const uid = master.getFirstPropertyValue('uid') as string
+  const target = icalTimeFromIso(recurrenceId, masterIsAllDay(master))
 
   for (const v of comp.getAllSubcomponents('vevent')) {
     const rid = getRecurrenceId(v)
-    if (rid && rid.toJSDate().toISOString() === recurrenceId) comp.removeSubcomponent(v)
+    // Compare as ICAL.Time, not stringified instants: recurrenceId may
+    // arrive as a bare YYYY-MM-DD (all-day series) or a full ISO instant,
+    // and rid.toJSDate().toISOString() is server-TZ-dependent for DATE values.
+    if (rid && rid.compare(target) === 0) comp.removeSubcomponent(v)
   }
 
   // An override (RECURRENCE-ID) VEVENT must never carry its own RRULE per
@@ -241,12 +245,17 @@ export function applyThisAndFuture(
 export function deleteThisOccurrence(ics: string, recurrenceId: string): string {
   const comp = parseCalendar(ics)
   const master = getMaster(comp)
+  const target = icalTimeFromIso(recurrenceId, masterIsAllDay(master))
 
   for (const v of comp.getAllSubcomponents('vevent')) {
     const rid = getRecurrenceId(v)
-    if (rid && rid.toJSDate().toISOString() === recurrenceId) comp.removeSubcomponent(v)
+    // See applyThisOccurrence: match on ICAL.Time, not stringified instants.
+    if (rid && rid.compare(target) === 0) comp.removeSubcomponent(v)
   }
 
+  // Build a fresh ICAL.Time for the EXDATE rather than reusing `target`,
+  // which the compare loop above holds -- no shared reference into the
+  // serialized component.
   master.addPropertyWithValue('exdate', icalTimeFromIso(recurrenceId, masterIsAllDay(master)))
   return comp.toString()
 }
