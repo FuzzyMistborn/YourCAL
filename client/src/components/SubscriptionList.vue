@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { useSubscriptionsStore } from '../stores/subscriptions.js'
 import ConfirmDialog from './ConfirmDialog.vue'
 
@@ -8,6 +8,13 @@ const store = useSubscriptionsStore()
 const adding = ref(false)
 const newName = ref('')
 const newUrl = ref('')
+const nameInput = ref<HTMLInputElement | null>(null)
+
+function toggleAdd(): void {
+  adding.value = !adding.value
+  // The bare `autofocus`/HTML default isn't honored on v-if re-insertion.
+  if (adding.value) void nextTick(() => nameInput.value?.focus())
+}
 
 function onColorInput(id: string, event: Event): void {
   store.setColor(id, (event.target as HTMLInputElement).value)
@@ -37,11 +44,11 @@ function confirmRemove(): void {
   <div class="subscription-list">
     <div class="subscription-list__header">
       <h2 class="subscription-list__heading">Subscriptions</h2>
-      <button type="button" class="icon-add-btn" title="Add subscription" @click="adding = !adding">+</button>
+      <button type="button" class="icon-add-btn" title="Add subscription" @click="toggleAdd">+</button>
     </div>
 
     <form v-if="adding" class="subscription-list__form" @submit.prevent="submitAdd">
-      <input v-model="newName" type="text" placeholder="Name" required />
+      <input ref="nameInput" v-model="newName" type="text" placeholder="Name" required />
       <input v-model="newUrl" type="url" placeholder="https:// or webcal:// URL" required />
       <div class="subscription-list__form-actions">
         <button type="button" class="btn btn-ghost" @click="adding = false">Cancel</button>
