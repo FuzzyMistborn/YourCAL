@@ -9,7 +9,7 @@ import FullCalendar from '@fullcalendar/vue3'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import type { CalendarObject, EditScope, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CalendarList from '../components/CalendarList.vue'
 import ConflictDialog from '../components/ConflictDialog.vue'
 import EventDetailPopover from '../components/EventDetailPopover.vue'
@@ -48,12 +48,13 @@ const clipboardStore = useClipboardStore()
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
 
-// True while a print is in progress -- swaps the live FullCalendar out for a
-// purpose-built static <PrintView> (see the @media print rules); the browser
-// prints FullCalendar's own table markup badly (missing grid lines, header
-// not aligned to the day columns).
-const printing = ref(false)
-
+// The browser prints FullCalendar's own table markup badly (missing grid
+// lines, header not aligned to the day columns), so a purpose-built static
+// <PrintView> is always mounted (hidden on screen) and swapped in by the
+// @media print rules. It's driven entirely by `printContext`, kept current
+// from onDatesSet -- so the browser's own Ctrl/Cmd-P works with no JS timing
+// (Firefox in particular doesn't reliably flush a reactive change during
+// beforeprint).
 interface PrintContext {
   mode: 'month' | 'week' | 'day' | 'agenda' | 'year'
   anchor: string
@@ -71,35 +72,8 @@ function viewTypeToMode(type: string): PrintContext['mode'] {
   return 'agenda'
 }
 
-function capturePrintContext(): void {
-  const api = fullCalendarRef.value?.getApi()
-  if (!api) return
-  const view = api.view
-  printContext.value = {
-    mode: viewTypeToMode(view.type),
-    anchor: api.getDate().toISOString(),
-    rangeStart: view.activeStart.toISOString(),
-    rangeEnd: view.activeEnd.toISOString(),
-    title: view.title,
-  }
-}
-
-// Sidebar "Print" button: snapshot the current view, render <PrintView>, then
-// open the dialog. afterprint (below) flips back.
-async function printCalendar(): Promise<void> {
-  capturePrintContext()
-  printing.value = true
-  await nextTick()
+function printCalendar(): void {
   window.print()
-}
-
-// Also catch the browser's own Ctrl/Cmd-P.
-function onBeforePrint(): void {
-  capturePrintContext()
-  printing.value = true
-}
-function onAfterPrint(): void {
-  printing.value = false
 }
 
 const printEvents = computed<PrintEvent[]>(() =>
@@ -232,6 +206,13 @@ const calendarDate = ref<string | null>(null)
 function onDatesSet(arg: DatesSetArg): void {
   visibleRange.value = { start: arg.start.toISOString(), end: arg.end.toISOString() }
   calendarDate.value = arg.view.currentStart.toISOString()
+  printContext.value = {
+    mode: viewTypeToMode(arg.view.type),
+    anchor: arg.view.currentStart.toISOString(),
+    rangeStart: arg.start.toISOString(),
+    rangeEnd: arg.end.toISOString(),
+    title: arg.view.title,
+  }
   void loadVisibleRange()
 }
 
@@ -817,16 +798,12 @@ function onImported(): void {
 
 onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown)
-  window.addEventListener('beforeprint', onBeforePrint)
-  window.addEventListener('afterprint', onAfterPrint)
   await calendarsStore.load()
   await loadVisibleRange()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
-  window.removeEventListener('beforeprint', onBeforePrint)
-  window.removeEventListener('afterprint', onAfterPrint)
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
@@ -946,7 +923,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     </main>
 
     <PrintView
-      v-if="printing && printContext"
+      v-if="printContext"
       class="print-only"
       :mode="printContext.mode"
       :anchor="printContext.anchor"

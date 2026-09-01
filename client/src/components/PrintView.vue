@@ -217,8 +217,13 @@ function timeLabel(e: PrintEvent): string {
 
 /* --- Month / Year grid --- */
 .pv-month {
-  break-inside: avoid;
   margin-bottom: 0.5cm;
+}
+/* A single month grid can legitimately be taller than one page when a day
+   is very busy -- let it break rather than overflow. The 12 small grids in
+   Year mode should each stay whole. */
+.print-view--year .pv-month {
+  break-inside: avoid;
 }
 .pv-month__name {
   font-size: 12pt;
@@ -227,10 +232,16 @@ function timeLabel(e: PrintEvent): string {
 .pv-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  border-top: 1px solid #000;
+}
+/* Every cell carries its right + bottom edge; the first column and the
+   header row add the remaining two edges, so the outer frame is drawn by
+   the cells themselves (a border on the grid container gets dropped at the
+   page-margin edge by some print engines). */
+.pv-grid > :nth-child(7n + 1) {
   border-left: 1px solid #000;
 }
 .pv-grid__head {
+  border-top: 1px solid #000;
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
   padding: 2px 4px;
@@ -242,9 +253,8 @@ function timeLabel(e: PrintEvent): string {
 .pv-cell {
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
-  min-height: 2.2cm;
+  min-height: 1.8cm;
   padding: 2px 3px;
-  overflow: hidden;
 }
 .print-view--year .pv-cell {
   min-height: 1.2cm;
@@ -311,13 +321,15 @@ function timeLabel(e: PrintEvent): string {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 0;
-  border-top: 1px solid #000;
-  border-left: 1px solid #000;
 }
 .pv-cols--one {
   grid-template-columns: 1fr;
 }
+.pv-cols > :first-child {
+  border-left: 1px solid #000;
+}
 .pv-col {
+  border-top: 1px solid #000;
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
   padding: 3px 5px;
