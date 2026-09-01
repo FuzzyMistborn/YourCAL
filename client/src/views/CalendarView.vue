@@ -518,7 +518,10 @@ async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> 
   }
 
   try {
-    await eventsStore.deleteEvent(event.calendarId, event.uid, {
+    // A partial-scope delete leaves the rewritten series behind (fresh
+    // href/etag); Undo needs it to clear the series before restoring the
+    // snapshot, or the calendar ends up with two objects sharing the UID.
+    const remaining = await eventsStore.deleteEvent(event.calendarId, event.uid, {
       href: event.href,
       etag: event.etag,
       scope,
@@ -527,7 +530,7 @@ async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> 
     if (snapshotIcs) {
       const ics = snapshotIcs
       undoStore.offer(`Deleted “${event.summary || '(No title)'}”`, async () => {
-        await eventsStore.restoreEvent(event.calendarId, event.uid, ics)
+        await eventsStore.restoreEvent(event.calendarId, event.uid, ics, remaining)
         fullCalendarRef.value?.getApi().refetchEvents()
       })
     }
