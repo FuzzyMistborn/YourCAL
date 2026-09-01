@@ -20,17 +20,6 @@ interface DigestChallenge {
   algorithm?: string
 }
 
-interface CachedChallenge {
-  challenge: DigestChallenge
-  cnonce: string
-  nc: number
-}
-
-// Keyed by `${origin}\n${username}` -- a Digest nonce is scoped to the
-// server, so every request to the same host (calendar CRUD, the sharing
-// API, PROPPATCH) can reuse one negotiated challenge and just bump `nc`.
-const challengeCache = new Map<string, CachedChallenge>()
-
 export function parseDigestChallenge(headerValue: string): DigestChallenge | null {
   const match = /^\s*Digest\s+(.*)$/is.exec(headerValue)
   if (!match) return null
@@ -102,22 +91,57 @@ export function buildDigestHeader(
  * login route does, via `assertHostAllowed`, before calling this).
  */
 export async function detectAuthMethod(baseUrl: string): Promise<AuthMethod> {
-  let res: Response
-  try {
-    res = await fetch(baseUrl, {
+  // A single unauthenticated PROPFIND; returns the status + challenge, or
+  // null on a network error.
+  async function probe(url: string): Promise<{ status: number; wa: string; location: string | null }> {
+    const res = await fetch(url, {
       method: 'PROPFIND',
+      redirect: 'manual',
       headers: { 'Content-Type': 'application/xml', Depth: '0' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>',
     })
-  } catch {
-    return 'Basic'
+    await res.body?.cancel().catch(() => {})
+    return {
+      status: res.status,
+      wa: res.headers.get('www-authenticate') ?? '',
+      location: res.headers.get('location'),
+    }
   }
-  const wa = res.headers.get('www-authenticate') ?? ''
-  const decision: AuthMethod =
-    res.status === 401 && /\bDigest\b/i.test(wa) && !/\bBasic\b/i.test(wa) ? 'Digest' : 'Basic'
+
+  function fromChallenge(wa: string): AuthMethod {
+    return /\bDigest\b/i.test(wa) && !/\bBasic\b/i.test(wa) ? 'Digest' : 'Basic'
+  }
+
+  // The URLs to try, in order: the server URL as given, then -- for setups
+  // that 404/405 a PROPFIND on the bare origin but publish the real endpoint
+  // via a redirect (Baikal behind nginx does exactly this) -- whatever
+  // /.well-known/caldav redirects to.
+  const candidates = [baseUrl]
+  try {
+    const wk = await probe(new URL('/.well-known/caldav', baseUrl).href)
+    if (wk.status === 401) return debugDetect(baseUrl, wk.status, wk.wa, fromChallenge(wk.wa))
+    if (wk.status >= 300 && wk.status < 400 && wk.location) {
+      candidates.push(new URL(wk.location, baseUrl).href)
+    }
+  } catch {
+    // ignore -- fall through to the plain probe
+  }
+
+  for (const url of candidates) {
+    try {
+      const r = await probe(url)
+      if (r.status === 401) return debugDetect(url, r.status, r.wa, fromChallenge(r.wa))
+    } catch {
+      // try the next candidate
+    }
+  }
+  return debugDetect(baseUrl, 0, '', 'Basic')
+}
+
+function debugDetect(url: string, status: number, wa: string, decision: AuthMethod): AuthMethod {
   if (DAV_DEBUG) {
     // eslint-disable-next-line no-console
-    console.error(`[detectAuthMethod] ${baseUrl} status=${res.status} wwwAuth=${JSON.stringify(wa)} -> ${decision}`)
+    console.error(`[detectAuthMethod] ${url} status=${status} wwwAuth=${JSON.stringify(wa)} -> ${decision}`)
   }
   return decision
 }
@@ -185,31 +209,13 @@ export async function davFetch(
   const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
   const parsed = new URL(url)
   const uri = parsed.pathname + parsed.search
-  const key = `${parsed.origin}\n${ctx.username}`
 
-  const send = (challenge: DigestChallenge, nc: number, cnonce: string): Promise<Response> =>
-    traceFetch('auth', input, withAuthHeader(init, buildDigestHeader(ctx, { method, uri, challenge, nc, cnonce })))
-
-  // Fast path: reuse a previously negotiated challenge (sabre/dav validates
-  // the response purely by hash, so the same nonce works for many requests
-  // with an increasing `nc`). Only re-negotiate if it's gone stale.
-  const cached = challengeCache.get(key)
-  if (cached) {
-    cached.nc += 1
-    const res = await send(cached.challenge, cached.nc, cached.cnonce)
-    if (res.status !== 401) return res
-    // Nonce went stale: the 401 carries a fresh challenge -- use it directly.
-    const stale = parseDigestChallenge(res.headers.get('www-authenticate') ?? '')
-    await res.body?.cancel().catch(() => {})
-    challengeCache.delete(key)
-    if (stale) {
-      const entry: CachedChallenge = { challenge: stale, cnonce: randomBytes(16).toString('hex'), nc: 1 }
-      challengeCache.set(key, entry)
-      return send(stale, 1, entry.cnonce)
-    }
-  }
-
-  // Probe for a fresh challenge with a bodyless request (see withoutBody).
+  // Negotiate a fresh challenge for every request. A per-origin challenge
+  // cache seemed like a safe optimization (sabre validates purely by hash),
+  // but in practice a nonce that goes stale between requests -- or one left
+  // over from a previous, failed login attempt in the same process -- turns
+  // into a 401 loop that never recovers. One extra round trip per request
+  // is a fine price for a handshake that always works.
   let challenge: DigestChallenge | null = null
   const probe = await traceFetch('probe', input, withoutBody(init, method))
   if (probe.status === 401) {
@@ -228,7 +234,16 @@ export async function davFetch(
     await res.body?.cancel().catch(() => {})
   }
 
-  const entry: CachedChallenge = { challenge, cnonce: randomBytes(16).toString('hex'), nc: 1 }
-  challengeCache.set(key, entry)
-  return send(challenge, 1, entry.cnonce)
+  const cnonce = randomBytes(16).toString('hex')
+  const header = buildDigestHeader(ctx, { method, uri, challenge, nc: 1, cnonce })
+  if (DAV_DEBUG) {
+    const H = hashFor(challenge.algorithm)
+    // eslint-disable-next-line no-console
+    console.error(
+      `[davFetch digest] uri=${uri} user=${JSON.stringify(ctx.username)} realm=${JSON.stringify(challenge.realm)}` +
+        ` qop=${challenge.qop ?? '-'} algo=${challenge.algorithm ?? '-'}` +
+        ` a1=${H(`${ctx.username}:${challenge.realm}:${ctx.password}`).slice(0, 8)}… passLen=${ctx.password.length}`,
+    )
+  }
+  return traceFetch('auth', input, withAuthHeader(init, header))
 }
