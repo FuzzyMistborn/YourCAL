@@ -19,6 +19,8 @@ import type { DuplicateScope } from '../components/DuplicateScopeDialog.vue'
 import EventEditDialog from '../components/EventEditDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import MiniMonth from '../components/MiniMonth.vue'
+import PrintView from '../components/PrintView.vue'
+import type { PrintEvent } from '../components/PrintView.vue'
 import RecurrenceScopeDialog from '../components/RecurrenceScopeDialog.vue'
 import SearchBox from '../components/SearchBox.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
@@ -46,51 +48,70 @@ const clipboardStore = useClipboardStore()
 const visibleRange = ref<{ start: string; end: string } | null>(null)
 const errorBanner = ref<string | null>(null)
 
-// True while a print is in progress -- reshapes calendarOptions (no
-// toolbar, natural height, no event-row clipping) and drives the
-// `.layout--printing` / @media print styles.
+// True while a print is in progress -- swaps the live FullCalendar out for a
+// purpose-built static <PrintView> (see the @media print rules); the browser
+// prints FullCalendar's own table markup badly (missing grid lines, header
+// not aligned to the day columns).
 const printing = ref(false)
 
-// Triggered by the sidebar "Print" button. Flip into print layout, wait
-// for FullCalendar to re-render at its natural height, then open the
-// dialog; afterprint (below) flips back.
+interface PrintContext {
+  mode: 'month' | 'week' | 'day' | 'agenda' | 'year'
+  anchor: string
+  rangeStart: string
+  rangeEnd: string
+  title: string
+}
+const printContext = ref<PrintContext | null>(null)
+
+function viewTypeToMode(type: string): PrintContext['mode'] {
+  if (type === 'dayGridMonth') return 'month'
+  if (type.startsWith('timeGridWeek') || type === 'dayGridWeek') return 'week'
+  if (type.startsWith('timeGridDay') || type === 'dayGridDay') return 'day'
+  if (type === 'multiMonthYear') return 'year'
+  return 'agenda'
+}
+
+function capturePrintContext(): void {
+  const api = fullCalendarRef.value?.getApi()
+  if (!api) return
+  const view = api.view
+  printContext.value = {
+    mode: viewTypeToMode(view.type),
+    anchor: api.getDate().toISOString(),
+    rangeStart: view.activeStart.toISOString(),
+    rangeEnd: view.activeEnd.toISOString(),
+    title: view.title,
+  }
+}
+
+// Sidebar "Print" button: snapshot the current view, render <PrintView>, then
+// open the dialog. afterprint (below) flips back.
 async function printCalendar(): Promise<void> {
+  capturePrintContext()
   printing.value = true
   await nextTick()
-  // A rAF after nextTick gives FullCalendar's own post-option-change
-  // reflow a frame to settle before the (synchronous, blocking) print.
-  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
-  measurePrintCellHeight()
   window.print()
 }
 
-// Per-week-row cell height for print, sized so the grid fills one landscape
-// page without spilling onto a second. A fixed min-height can't do this: a
-// 6-row month needs shorter rows than a 4-row one. Recomputed from the real
-// row count FullCalendar rendered, just before the print dialog opens.
-const printCellHeight = ref('2.6cm')
-
-function measurePrintCellHeight(): void {
-  const rows = document.querySelectorAll('.fc .fc-daygrid-body tr').length
-  if (!rows) {
-    printCellHeight.value = '2.6cm'
-    return
-  }
-  // Usable height of a landscape page after margins, less the month title
-  // and weekday-header strip. Conservative so Letter and A4 both fit.
-  const perRow = 16.8 / rows
-  printCellHeight.value = `${Math.max(1.6, Math.min(3.4, perRow)).toFixed(2)}cm`
-}
-
-// Also catch the browser's own Ctrl/Cmd-P: set the flag so the chrome is
-// hidden even though there's no chance to reflow first.
+// Also catch the browser's own Ctrl/Cmd-P.
 function onBeforePrint(): void {
+  capturePrintContext()
   printing.value = true
-  measurePrintCellHeight()
 }
 function onAfterPrint(): void {
   printing.value = false
 }
+
+const printEvents = computed<PrintEvent[]>(() =>
+  rawVisibleEvents.value.map((e) => ({
+    id: `${e.calendarId}:${e.uid}:${e.recurrenceId ?? ''}`,
+    title: e.summary,
+    start: e.start,
+    end: e.end,
+    allDay: e.allDay,
+    color: e.color ?? calendarColors.value[e.calendarId] ?? '#3b82f6',
+  })),
+)
 // Transient positive feedback (e.g. "Event copied"), auto-clears.
 const noticeBanner = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
@@ -611,15 +632,11 @@ async function onEventResize(arg: EventResizeDoneArg): Promise<void> {
 const calendarOptions = computed<CalendarOptions>(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin, multiMonthPlugin],
   initialView: 'dayGridMonth',
-  // While printing, drop the toolbar and let the grid grow to its natural
-  // height with every event shown (no "+N more" clipping) -- see onBeforePrint.
-  headerToolbar: printing.value
-    ? false
-    : {
-        left: 'prev,next today',
-        center: 'title',
-        right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
-      },
+  headerToolbar: {
+    left: 'prev,next today',
+    center: 'title',
+    right: 'multiMonthYear,dayGridMonth,timeGridWeek,timeGridDay,listMonth',
+  },
   buttonText: {
     listMonth: 'Agenda',
     multiMonthYear: 'Year',
@@ -627,9 +644,9 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   // The agenda view has nothing to show for an empty range -- spell that
   // out rather than leaving a bare gap.
   noEventsText: 'No events in this range',
-  height: printing.value ? 'auto' : '100%',
-  expandRows: !printing.value,
-  dayMaxEventRows: !printing.value,
+  height: '100%',
+  expandRows: true,
+  dayMaxEventRows: true,
   firstDay: settingsStore.firstDay,
   editable: true,
   selectable: true,
@@ -740,7 +757,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
 </script>
 
 <template>
-  <div class="layout" :class="{ 'layout--printing': printing }" :style="{ '--print-cell-h': printCellHeight }">
+  <div class="layout">
     <aside class="sidebar">
       <div class="sidebar__brand">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -828,6 +845,18 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
         <FullCalendar ref="fullCalendarRef" :options="calendarOptions" />
       </div>
     </main>
+
+    <PrintView
+      v-if="printing && printContext"
+      class="print-only"
+      :mode="printContext.mode"
+      :anchor="printContext.anchor"
+      :range-start="printContext.rangeStart"
+      :range-end="printContext.rangeEnd"
+      :title="printContext.title"
+      :week-start="settingsStore.firstDay"
+      :events="printEvents"
+    />
 
     <EventDetailPopover
       v-if="detailEvent && detailPosition"
@@ -1158,114 +1187,35 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   font-size: 0.75rem;
 }
 
-/* --- Print --- unscoped so it also reaches the teleported UndoToast and
-   FullCalendar's own markup. `.layout--printing` is toggled just before
-   window.print() (and on the browser's own Ctrl/Cmd-P via beforeprint);
-   the @media print block is the fallback for anything that slips through. */
+/* --- Print --- the live FullCalendar prints its own table markup badly
+   (missing grid lines, header not aligned to the day columns), so while
+   printing the app renders a purpose-built static <PrintView> instead and
+   this block hides everything else. Unscoped so it reaches the teleported
+   toast/popover and PrintView's host element. */
+.print-only {
+  display: none;
+}
 @media print {
-  .sidebar,
-  .error-banner,
-  .notice-banner,
-  .undo-toast,
-  .popover {
-    display: none !important;
-  }
+  body,
+  #app,
   .layout {
     display: block !important;
     height: auto !important;
+    overflow: visible !important;
   }
-  .main {
-    padding: 0 !important;
+  .sidebar,
+  .main,
+  .undo-toast,
+  .popover,
+  .overlay {
+    display: none !important;
   }
-  .calendar-card {
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
+  .print-only {
+    display: block !important;
   }
-  /* Keep calendar/event colors -- and grid borders -- instead of the
-     browser's ink-saving wash. Applied broadly because Chrome's ink saver
-     was dropping roughly every other week-divider line otherwise. */
-  .fc *,
-  .fc-event,
-  .fc-daygrid-event-dot {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  /* FullCalendar draws its grid lines as table borders; pagination + the
-     browser's ink saver drop some (whole week dividers, and roughly every
-     other column line). Force an explicit 1px border on every edge -- both
-     axes -- so the grid always prints complete. */
-  .fc-scrollgrid,
-  .fc-scrollgrid td,
-  .fc-scrollgrid th {
-    border-color: var(--color-border) !important;
-    border-style: solid !important;
-  }
-  .fc .fc-scrollgrid {
-    border-left: 1px solid var(--color-border) !important;
-    border-top: 1px solid var(--color-border) !important;
-  }
-  .fc .fc-daygrid-body tr,
-  .fc .fc-daygrid-day {
-    border-bottom: 1px solid var(--color-border) !important;
-  }
-  .fc .fc-col-header-cell,
-  .fc .fc-daygrid-day,
-  .fc .fc-scrollgrid-sync-table td {
-    border-right: 1px solid var(--color-border) !important;
-  }
-  /* Fill the sheet: let the grid grow, with each week row tall enough to
-     spread down the page. --print-cell-h is sized in JS from the real row
-     count so the month still fits on one page (fallback covers Ctrl/Cmd-P
-     before the measure runs). */
-  .fc,
-  .fc .fc-view-harness,
-  .fc .fc-daygrid-body,
-  .fc-scrollgrid-sync-table {
-    height: auto !important;
-    width: 100% !important;
-  }
-  .fc-daygrid-day-frame {
-    min-height: var(--print-cell-h, 2.6cm) !important;
-  }
-  /* A month grid is landscape-shaped; force it so a 7-column week never
-     wraps or overflows onto a second page. */
   @page {
     size: landscape;
     margin: 1cm;
   }
-  .fc .fc-daygrid-body tr {
-    break-inside: avoid;
-  }
-}
-
-.layout--printing .sidebar,
-.layout--printing .error-banner,
-.layout--printing .notice-banner {
-  display: none;
-}
-.layout--printing .main {
-  padding: 0;
-}
-.layout--printing .calendar-card {
-  border: none;
-  box-shadow: none;
-  padding: 0;
-}
-.layout--printing .fc .fc-daygrid-body tr,
-.layout--printing .fc .fc-daygrid-day {
-  border-bottom: 1px solid var(--color-border);
-}
-.layout--printing .fc .fc-col-header-cell,
-.layout--printing .fc .fc-daygrid-day,
-.layout--printing .fc .fc-scrollgrid-sync-table td {
-  border-right: 1px solid var(--color-border);
-}
-.layout--printing .fc .fc-scrollgrid {
-  border-left: 1px solid var(--color-border);
-  border-top: 1px solid var(--color-border);
-}
-.layout--printing .fc-daygrid-day-frame {
-  min-height: var(--print-cell-h, 2.6cm);
 }
 </style>
