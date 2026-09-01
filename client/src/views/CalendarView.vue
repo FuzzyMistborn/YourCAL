@@ -133,11 +133,19 @@ const writableEnabledCalendarIds = computed(() =>
 )
 // Prefer the user's saved default calendar, but fall back to the first
 // writable/enabled one if it's unset, disabled, hidden, or no longer exists.
-const preferredDefaultCalendarId = computed(() =>
-  writableEnabledCalendarIds.value.includes(settingsStore.defaultCalendarId)
-    ? settingsStore.defaultCalendarId
-    : (writableEnabledCalendarIds.value[0] ?? ''),
-)
+// In 'last-used' mode the most recently used calendar takes precedence over
+// the fixed default (still subject to the same writable/enabled check).
+const preferredDefaultCalendarId = computed(() => {
+  const candidates =
+    settingsStore.defaultCalendarMode === 'last-used'
+      ? [settingsStore.lastUsedCalendarId, settingsStore.defaultCalendarId]
+      : [settingsStore.defaultCalendarId]
+  return (
+    candidates.find((id) => writableEnabledCalendarIds.value.includes(id)) ??
+    writableEnabledCalendarIds.value[0] ??
+    ''
+  )
+})
 const calendarColors = computed(() => {
   const fromCalendars = Object.fromEntries(calendarsStore.calendars.map((c) => [c.id, calendarsStore.colorFor(c.id)]))
   const fromSubscriptions = Object.fromEntries(subscriptionsStore.subscriptions.map((s) => [s.id, s.color]))
@@ -429,6 +437,9 @@ async function onCreateSave(calendarId: string, fields: EventFields): Promise<vo
   closeDialogs()
   try {
     await eventsStore.createEvent(calendarId, fields)
+    // Remember where this event landed so 'last-used' mode can default the
+    // next new-event dialog to the same calendar.
+    settingsStore.setLastUsedCalendarId(calendarId)
     // The reactive `events` option update alone doesn't always make
     // FullCalendar's Vue wrapper repaint the month grid in the same tick --
     // force it explicitly so the new event shows up immediately.
