@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { DAVClient } from 'tsdav'
+import { davFetch } from './auth.js'
 import type { DavContext } from './context.js'
 
 // createClient's login() runs full CalDAV discovery (well-known -> principal
@@ -33,7 +34,9 @@ setInterval(
 ).unref()
 
 function cacheKey(ctx: DavContext): string {
-  return createHash('sha256').update(`${ctx.baseUrl}\n${ctx.username}\n${ctx.password}`).digest('hex')
+  return createHash('sha256')
+    .update(`${ctx.baseUrl}\n${ctx.username}\n${ctx.password}\n${ctx.authMethod ?? 'Basic'}`)
+    .digest('hex')
 }
 
 export async function createClient(ctx: DavContext): Promise<DAVClient> {
@@ -49,8 +52,14 @@ export async function createClient(ctx: DavContext): Promise<DAVClient> {
       username: ctx.username,
       password: ctx.password,
     },
+    // tsdav's own 'Digest' mode is a stub (a pre-baked static string, no
+    // nonce/nc/qop handling). Instead every request goes through davFetch,
+    // which does the real Basic-or-Digest handshake per request; the
+    // authMethod here only controls the (redundant, harmless) header tsdav
+    // pre-attaches, so 'Basic' is fine for both.
     authMethod: 'Basic',
     defaultAccountType: 'caldav',
+    fetch: (input: string | URL | Request, init?: RequestInit) => davFetch(ctx, input, init),
   })
   await client.login()
 

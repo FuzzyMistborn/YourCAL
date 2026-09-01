@@ -1,6 +1,6 @@
 import { xml2js } from 'xml-js'
+import { davFetch } from './auth.js'
 import type { DavContext } from './context.js'
-import { basicAuthHeader } from './sharing.js'
 
 /**
  * Reads real per-calendar write access via the standard WebDAV ACL
@@ -48,9 +48,9 @@ function collectPrivileges(node: unknown, out: Set<string>): void {
  */
 export async function isCalendarReadOnly(ctx: DavContext, calendarUrl: string): Promise<boolean> {
   try {
-    const res = await fetch(calendarUrl, {
+    const res = await davFetch(ctx, calendarUrl, {
       method: 'PROPFIND',
-      headers: { ...basicAuthHeader(ctx), 'Content-Type': 'application/xml', Depth: '0' },
+      headers: { 'Content-Type': 'application/xml', Depth: '0' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-privilege-set/></d:prop></d:propfind>',
     })
     if (!res.ok) return false
