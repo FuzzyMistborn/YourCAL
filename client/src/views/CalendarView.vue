@@ -2,7 +2,7 @@
 import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventDropArg } from '@fullcalendar/core'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import interactionPlugin from '@fullcalendar/interaction'
-import type { EventResizeDoneArg } from '@fullcalendar/interaction'
+import type { DateClickArg, EventResizeDoneArg } from '@fullcalendar/interaction'
 import listPlugin from '@fullcalendar/list'
 import multiMonthPlugin from '@fullcalendar/multimonth'
 import FullCalendar from '@fullcalendar/vue3'
@@ -331,13 +331,62 @@ function onDetailDelete(): void {
   confirmingDelete.value = event
 }
 
+// A single click on a day fires both `dateClick` and `select`. To let a
+// double-click open the day view without the create dialog flashing open on
+// the first click, the create dialog is opened on a short delay that a
+// second click (or a year-view navigation) can cancel.
+const DOUBLE_CLICK_MS = 350
+const CREATE_DELAY_MS = 250
+let pendingCreateTimer: ReturnType<typeof setTimeout> | undefined
+let lastDayClick: { date: string; ts: number } | null = null
+let lastNavTs = 0
+
+function cancelPendingCreate(): void {
+  if (pendingCreateTimer !== undefined) {
+    clearTimeout(pendingCreateTimer)
+    pendingCreateTimer = undefined
+  }
+}
+
 function onSelect(arg: DateSelectArg): void {
   if (writableEnabledCalendarIds.value.length === 0) {
     errorBanner.value = 'No writable calendar is available -- enable or create one first.'
     return
   }
-  createSlot.value = { start: arg.start.toISOString(), end: arg.end.toISOString(), allDay: arg.allDay }
-  isCreating.value = true
+  // The year overview is for navigating, not creating -- onDateClick handles it.
+  if (fullCalendarRef.value?.getApi().view.type === 'multiMonthYear') return
+  // A double-click just navigated to the day view; don't also open create.
+  if (Date.now() - lastNavTs < DOUBLE_CLICK_MS + 100) return
+
+  const slot = { start: arg.start.toISOString(), end: arg.end.toISOString(), allDay: arg.allDay }
+  cancelPendingCreate()
+  pendingCreateTimer = setTimeout(() => {
+    pendingCreateTimer = undefined
+    createSlot.value = slot
+    isCreating.value = true
+  }, CREATE_DELAY_MS)
+}
+
+function onDateClick(arg: DateClickArg): void {
+  const api = fullCalendarRef.value?.getApi()
+
+  // Year view: a day click zooms into that month rather than creating an event.
+  if (api?.view.type === 'multiMonthYear') {
+    cancelPendingCreate()
+    lastNavTs = Date.now()
+    api.changeView('dayGridMonth', arg.date)
+    return
+  }
+
+  const now = Date.now()
+  if (lastDayClick && lastDayClick.date === arg.dateStr && now - lastDayClick.ts < DOUBLE_CLICK_MS) {
+    cancelPendingCreate()
+    lastDayClick = null
+    lastNavTs = now
+    api?.changeView('timeGridDay', arg.date)
+    return
+  }
+  lastDayClick = { date: arg.dateStr, ts: now }
 }
 
 function closeDialogs(): void {
@@ -637,6 +686,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   datesSet: onDatesSet,
   eventClick: onEventClick,
   select: onSelect,
+  dateClick: onDateClick,
   eventDrop: onEventDrop,
   eventResize: onEventResize,
 }))

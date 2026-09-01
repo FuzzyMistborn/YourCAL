@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Calendar } from '@yourcal/shared'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useCalendarsStore } from '../stores/calendars.js'
 import { useSettingsStore } from '../stores/settings.js'
 import CalendarListItem from './CalendarListItem.vue'
@@ -41,6 +41,7 @@ const newName = ref('')
 const newColor = ref('#0082c9')
 const creating = ref(false)
 const createError = ref<string | null>(null)
+const nameInput = ref<HTMLInputElement | null>(null)
 
 function toggleNewForm(): void {
   showNewForm.value = !showNewForm.value
@@ -48,6 +49,9 @@ function toggleNewForm(): void {
     newName.value = ''
     newColor.value = '#0082c9'
     createError.value = null
+    // The bare `autofocus` attribute is only honored on initial page load,
+    // not when v-if re-inserts the form -- focus it explicitly.
+    void nextTick(() => nameInput.value?.focus())
   }
 }
 
@@ -86,6 +90,7 @@ async function submitNewCalendar(): Promise<void> {
       @keydown.esc="closeNewForm"
     >
       <input
+        ref="nameInput"
         v-model="newName"
         type="text"
         placeholder="Calendar name"
