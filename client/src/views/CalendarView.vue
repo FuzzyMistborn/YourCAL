@@ -24,7 +24,7 @@ import SearchBox from '../components/SearchBox.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import SubscriptionList from '../components/SubscriptionList.vue'
 import UndoToast from '../components/UndoToast.vue'
-import { ApiRequestError } from '../api.js'
+import { api, ApiRequestError } from '../api.js'
 import { useCalendarsStore } from '../stores/calendars.js'
 import { useEventsStore } from '../stores/events.js'
 import { useNotificationsStore } from '../stores/notifications.js'
@@ -437,6 +437,17 @@ async function doUpdate(
 }
 
 async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> {
+  // Snapshot the full ICS before deleting so "Undo" can re-create the exact
+  // object -- UID, RRULE, EXDATEs and per-occurrence overrides intact --
+  // rather than a fresh-UID approximation. If the snapshot fails, the delete
+  // still proceeds, just without an undo offer.
+  let snapshotIcs: string | null = null
+  try {
+    snapshotIcs = await api.exportEventIcs(event.calendarId, event.uid, event.href)
+  } catch {
+    snapshotIcs = null
+  }
+
   try {
     await eventsStore.deleteEvent(event.calendarId, event.uid, {
       href: event.href,
@@ -444,13 +455,10 @@ async function doDelete(event: CalendarObject, scope: EditScope): Promise<void> 
       scope,
       recurrenceId: event.recurrenceId,
     })
-    // Undo re-creates the event from the copy still in memory. It comes
-    // back with a fresh UID/href (a new CalDAV object) -- fine for a
-    // personal calendar, but it won't restore a recurring series'
-    // overrides, so only offer it for plain non-recurring events.
-    if (!event.isRecurring) {
+    if (snapshotIcs) {
+      const ics = snapshotIcs
       undoStore.offer(`Deleted “${event.summary || '(No title)'}”`, async () => {
-        await eventsStore.createEvent(event.calendarId, toFields(event, event.start, event.end))
+        await eventsStore.restoreEvent(event.calendarId, event.uid, ics)
         fullCalendarRef.value?.getApi().refetchEvents()
       })
     }
@@ -899,7 +907,7 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
     <ConfirmDialog
       v-if="confirmingDelete"
       title="Delete event?"
-      :message="`Delete “${confirmingDelete.summary || '(No title)'}”? This can't be undone.`"
+      :message="`Delete “${confirmingDelete.summary || '(No title)'}”?`"
       @confirm="onConfirmDelete"
       @cancel="confirmingDelete = null"
     />

@@ -155,5 +155,35 @@ export const useEventsStore = defineStore('events', () => {
     await reloadLastRange([calendarId])
   }
 
-  return { byRange, loading, loadRange, reloadLastRange, eventsFor, findEvent, createEvent, updateEvent, deleteEvent }
+  // Undo a deletion by re-creating the object from a raw-ICS snapshot taken
+  // before the delete. A 'this'/'thisAndFuture' delete only modifies the
+  // object in place, so if one still holds this UID, remove it first --
+  // otherwise the calendar would end up with two objects sharing the UID.
+  async function restoreEvent(calendarId: string, uid: string, ics: string): Promise<void> {
+    await reloadLastRange([calendarId])
+    const existing = findEvent(calendarId, uid, null)
+    if (existing) {
+      await api.deleteEvent(calendarId, uid, {
+        href: existing.href,
+        etag: existing.etag,
+        scope: 'all',
+        recurrenceId: null,
+      })
+    }
+    await api.restoreEvent(calendarId, uid, ics)
+    await reloadLastRange([calendarId])
+  }
+
+  return {
+    byRange,
+    loading,
+    loadRange,
+    reloadLastRange,
+    eventsFor,
+    findEvent,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    restoreEvent,
+  }
 })

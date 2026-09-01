@@ -107,6 +107,25 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify(body),
     }),
+  // Raw ICS for one event, as text (the export route sets a
+  // Content-Disposition but still returns the body). Used to snapshot an
+  // event before deleting it so the deletion can be undone.
+  exportEventIcs: async (calendarId: string, uid: string, href: string): Promise<string> => {
+    const res = await fetch(
+      `/api/calendars/${calendarId}/events/${encodeURIComponent(uid)}/export?href=${encodeURIComponent(href)}`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({ error: 'unknown', message: res.statusText }))) as ApiError
+      throw new ApiRequestError(res.status, body)
+    }
+    return res.text()
+  },
+  restoreEvent: (calendarId: string, uid: string, ics: string) =>
+    request<CalendarObject>(`/calendars/${calendarId}/events/${encodeURIComponent(uid)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ ics }),
+    }),
   search: (q: string) => request<CalendarObject[]>(`/search?q=${encodeURIComponent(q)}`),
   importIcs: (calendarId: string, ics: string) =>
     request<{ imported: number; total: number }>(`/calendars/${calendarId}/import`, {

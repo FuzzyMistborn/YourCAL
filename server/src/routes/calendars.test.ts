@@ -152,6 +152,71 @@ describe('POST /api/calendars/:id/events', () => {
   })
 })
 
+describe('POST /api/calendars/:id/events/:uid/restore', () => {
+  const seriesIcs = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//test//EN',
+    'BEGIN:VEVENT',
+    'UID:series-1',
+    'DTSTAMP:20260101T000000Z',
+    'DTSTART:20260310T150000Z',
+    'DTEND:20260310T153000Z',
+    'RRULE:FREQ=WEEKLY;COUNT=5',
+    'EXDATE:20260317T150000Z',
+    'SUMMARY:Standup',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n')
+
+  it('re-creates the object verbatim from the ICS snapshot', async () => {
+    storeMock.discoverCalendars.mockResolvedValue([calendar()])
+    storeMock.createObject.mockResolvedValue({ uid: 'series-1', href: 'events/x.ics', etag: '"e1"' })
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/calendars/${CAL_ID}/events/series-1/restore`,
+      payload: { ics: seriesIcs },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(storeMock.createObject).toHaveBeenCalledWith(dav, CAL_ID, seriesIcs)
+    const [, , ics] = storeMock.createObject.mock.calls[0] as [unknown, unknown, string]
+    expect(ics).toContain('RRULE:FREQ=WEEKLY;COUNT=5')
+    expect(ics).toContain('EXDATE:20260317T150000Z')
+    expect(ics).toContain('UID:series-1')
+  })
+
+  it('400s on a missing or unparseable ICS body', async () => {
+    storeMock.discoverCalendars.mockResolvedValue([calendar()])
+    const app = await buildApp()
+    expect(
+      (await app.inject({ method: 'POST', url: `/api/calendars/${CAL_ID}/events/x/restore`, payload: {} })).statusCode,
+    ).toBe(400)
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/calendars/${CAL_ID}/events/x/restore`,
+          payload: { ics: 'not an ics' },
+        })
+      ).statusCode,
+    ).toBe(400)
+    expect(storeMock.createObject).not.toHaveBeenCalled()
+  })
+
+  it('403s when the calendar is read-only', async () => {
+    storeMock.discoverCalendars.mockResolvedValue([calendar({ readOnly: true })])
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/calendars/${CAL_ID}/events/series-1/restore`,
+      payload: { ics: seriesIcs },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(storeMock.createObject).not.toHaveBeenCalled()
+  })
+})
+
 describe('PUT /api/calendars/:id/events/:uid (etag conflict)', () => {
   it('translates EtagConflictError into a 412', async () => {
     storeMock.discoverCalendars.mockResolvedValue([calendar()])
