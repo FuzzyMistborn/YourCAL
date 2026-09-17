@@ -4,6 +4,9 @@ import { DateTime } from 'luxon'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api.js'
 import { triggerDownload } from '../lib/download.js'
+import { useSettingsStore } from '../stores/settings.js'
+
+const settingsStore = useSettingsStore()
 
 const props = defineProps<{
   event: CalendarObject
@@ -73,9 +76,10 @@ const timeRangeText = computed(() => {
       : `${start.toFormat('LLL d, yyyy')} – ${lastDay.toFormat('LLL d, yyyy')}`
   }
 
+  const timeFmt = settingsStore.timeFormat === '24h' ? 'HH:mm' : 'h:mm a'
   return start.hasSame(end, 'day')
-    ? `${start.toFormat('cccc, LLLL d')} · ${start.toFormat('h:mm a')} – ${end.toFormat('h:mm a')}`
-    : `${start.toFormat('LLL d, h:mm a')} – ${end.toFormat('LLL d, h:mm a')}`
+    ? `${start.toFormat('cccc, LLLL d')} · ${start.toFormat(timeFmt)} – ${end.toFormat(timeFmt)}`
+    : `${start.toFormat(`LLL d, ${timeFmt}`)} – ${end.toFormat(`LLL d, ${timeFmt}`)}`
 })
 
 // Only worth calling out when it differs from the viewer's own zone -- the

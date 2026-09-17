@@ -36,7 +36,7 @@ support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
 / unsubscribe / owner-side management), SQLite read-cache, calendar sort,
 undo toast, agenda / year / mini-month navigator, duplicate event /
-copy-paste, print view.
+copy-paste, print view, 12h/24h time format setting.
 
 ## Toolchain pins
 

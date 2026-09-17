@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { DateTime } from 'luxon'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useSettingsStore } from '../stores/settings.js'
 
 const props = defineProps<{ modelValue: string }>() // 'HH:mm', 24h
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
+const settingsStore = useSettingsStore()
+
 const STEP_MINUTES = 5
+// Free-text parsing stays lenient regardless of the display format setting,
+// so users can type either style.
 const PARSE_FORMATS = ['h:mm a', 'h:mma', 'H:mm', 'Hmm', 'h a', 'ha', 'h']
 
 interface Option {
@@ -14,17 +19,22 @@ interface Option {
   searchKey: string
 }
 
-const OPTIONS: Option[] = []
-for (let h = 0; h < 24; h++) {
-  for (let m = 0; m < 60; m += STEP_MINUTES) {
-    const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-    const label = DateTime.fromFormat(value, 'HH:mm').toFormat('h:mm a')
-    OPTIONS.push({ value, label, searchKey: label.toLowerCase().replace(/[^a-z0-9]/g, '') })
+const displayFormat = computed(() => (settingsStore.timeFormat === '24h' ? 'HH:mm' : 'h:mm a'))
+
+const OPTIONS = computed<Option[]>(() => {
+  const options: Option[] = []
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += STEP_MINUTES) {
+      const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+      const label = DateTime.fromFormat(value, 'HH:mm').toFormat(displayFormat.value)
+      options.push({ value, label, searchKey: label.toLowerCase().replace(/[^a-z0-9]/g, '') })
+    }
   }
-}
+  return options
+})
 
 function labelFor(value: string): string {
-  return OPTIONS.find((o) => o.value === value)?.label ?? value
+  return OPTIONS.value.find((o) => o.value === value)?.label ?? value
 }
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -69,9 +79,9 @@ watch(query, () => {
 
 const filteredOptions = computed<Option[]>(() => {
   const normalized = query.value.toLowerCase().replace(/[^a-z0-9]/g, '')
-  if (!normalized) return OPTIONS
-  const matches = OPTIONS.filter((o) => o.searchKey.includes(normalized))
-  return matches.length > 0 ? matches : OPTIONS
+  if (!normalized) return OPTIONS.value
+  const matches = OPTIONS.value.filter((o) => o.searchKey.includes(normalized))
+  return matches.length > 0 ? matches : OPTIONS.value
 })
 
 function openList(): void {

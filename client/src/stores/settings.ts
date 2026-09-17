@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 
 export type WeekStart = 'sunday' | 'monday'
 
+export type TimeFormat = '12h' | '24h'
+
 // 'server' preserves whatever order the CalDAV server's PROPFIND response
 // enumerated calendars in (CalDAV has no standard ordering property, so
 // this is really just "however the server happens to return them" -- see
@@ -19,10 +21,15 @@ const DEFAULT_CALENDAR_STORAGE_KEY = 'calendar.defaultCalendarId'
 const DEFAULT_CALENDAR_MODE_STORAGE_KEY = 'calendar.defaultCalendarMode'
 const LAST_USED_CALENDAR_STORAGE_KEY = 'calendar.lastUsedCalendarId'
 const SORT_ORDER_STORAGE_KEY = 'calendar.sortOrder'
+const TIME_FORMAT_STORAGE_KEY = 'calendar.timeFormat'
 
 function loadInitial(): WeekStart {
   const stored = localStorage.getItem(STORAGE_KEY)
   return stored === 'monday' ? 'monday' : 'sunday'
+}
+
+function loadTimeFormat(): TimeFormat {
+  return localStorage.getItem(TIME_FORMAT_STORAGE_KEY) === '24h' ? '24h' : '12h'
 }
 
 function loadDefaultCalendarMode(): DefaultCalendarMode {
@@ -40,6 +47,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const defaultCalendarMode = ref<DefaultCalendarMode>(loadDefaultCalendarMode())
   const lastUsedCalendarId = ref<string>(localStorage.getItem(LAST_USED_CALENDAR_STORAGE_KEY) ?? '')
   const calendarSortOrder = ref<CalendarSortOrder>(loadSortOrder())
+  const timeFormat = ref<TimeFormat>(loadTimeFormat())
 
   // FullCalendar's firstDay option: 0 = Sunday, 1 = Monday.
   const firstDay = computed(() => (weekStart.value === 'monday' ? 1 : 0))
@@ -69,6 +77,11 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(SORT_ORDER_STORAGE_KEY, value)
   }
 
+  function setTimeFormat(value: TimeFormat): void {
+    timeFormat.value = value
+    localStorage.setItem(TIME_FORMAT_STORAGE_KEY, value)
+  }
+
   return {
     weekStart,
     firstDay,
@@ -81,5 +94,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setLastUsedCalendarId,
     calendarSortOrder,
     setCalendarSortOrder,
+    timeFormat,
+    setTimeFormat,
   }
 })
