@@ -5,6 +5,7 @@ import {
   useSettingsStore,
   type CalendarSortOrder,
   type DefaultCalendarMode,
+  type TimeFormat,
   type WeekStart,
 } from '../stores/settings.js'
 
@@ -21,6 +22,11 @@ const weekStartModel = computed<WeekStart>({
 const calendarSortOrderModel = computed<CalendarSortOrder>({
   get: () => settingsStore.calendarSortOrder,
   set: (value) => settingsStore.setCalendarSortOrder(value),
+})
+
+const timeFormatModel = computed<TimeFormat>({
+  get: () => settingsStore.timeFormat,
+  set: (value) => settingsStore.setTimeFormat(value),
 })
 
 // Same "writable + currently enabled" restriction CalendarView applies when
@@ -66,6 +72,14 @@ const defaultCalendarModeModel = computed<DefaultCalendarMode>({
           <option value="server">Server order</option>
           <option value="name-asc">Name (A→Z)</option>
           <option value="name-desc">Name (Z→A)</option>
+        </select>
+      </label>
+
+      <label class="dialog__field dialog__field--row">
+        <span>Time format</span>
+        <select v-model="timeFormatModel">
+          <option value="12h">12-hour</option>
+          <option value="24h">24-hour</option>
         </select>
       </label>
 

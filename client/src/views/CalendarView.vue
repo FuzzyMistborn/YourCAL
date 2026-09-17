@@ -737,6 +737,16 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   expandRows: true,
   dayMaxEventRows: true,
   firstDay: settingsStore.firstDay,
+  slotLabelFormat: {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: settingsStore.timeFormat === '12h',
+  },
+  eventTimeFormat: {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: settingsStore.timeFormat === '12h',
+  },
   editable: true,
   selectable: true,
   events: fullCalendarEvents.value,

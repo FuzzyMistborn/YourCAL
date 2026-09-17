@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { DateTime } from 'luxon'
+import { useSettingsStore } from '../stores/settings.js'
+
+const settingsStore = useSettingsStore()
 
 export interface PrintEvent {
   id: string
@@ -134,7 +137,9 @@ const agendaGroups = computed<{ date: DateTime; events: PrintEvent[] }[]>(() => 
 })
 
 function timeLabel(e: PrintEvent): string {
-  return e.allDay ? '' : DateTime.fromISO(e.start).toFormat('h:mm a')
+  if (e.allDay) return ''
+  const timeFmt = settingsStore.timeFormat === '24h' ? 'HH:mm' : 'h:mm a'
+  return DateTime.fromISO(e.start).toFormat(timeFmt)
 }
 </script>
 

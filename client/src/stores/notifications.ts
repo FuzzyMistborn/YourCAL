@@ -2,6 +2,7 @@ import type { CalendarObject } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useSettingsStore } from './settings.js'
 
 // Only reminders whose fire time falls within this window of "now" get a
 // setTimeout scheduled -- an alarm three months out would need a timer
@@ -27,8 +28,9 @@ export const useNotificationsStore = defineStore('notifications', () => {
   function fire(event: CalendarObject, minutesBefore: number): void {
     if (permission.value !== 'granted') return
     const when = DateTime.fromISO(event.start)
+    const timeFmt = useSettingsStore().timeFormat === '24h' ? 'HH:mm' : 'h:mm a'
     new Notification(event.summary || '(No title)', {
-      body: minutesBefore === 0 ? 'Starting now' : `${when.toFormat('h:mm a')} · ${minutesBefore} min reminder`,
+      body: minutesBefore === 0 ? 'Starting now' : `${when.toFormat(timeFmt)} · ${minutesBefore} min reminder`,
       tag: `${event.calendarId}:${event.uid}:${event.recurrenceId ?? ''}:${minutesBefore}`,
     })
   }
