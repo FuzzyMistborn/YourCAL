@@ -212,8 +212,10 @@ async function loadVisibleRange(): Promise<void> {
   } catch {
     // eventsStore.loadRange already commits whatever calendars *did* load
     // successfully (see its own allSettled handling) -- this is purely to
-    // surface that some calendar failed, not to discard the rest.
-    errorBanner.value = 'Some calendars failed to load. Showing what loaded successfully.'
+    // surface that some calendar failed, not to discard the rest. Doesn't
+    // clobber a more specific error already showing (a background
+    // auto-refresh can land while one is up).
+    errorBanner.value ??= 'Some calendars failed to load. Showing what loaded successfully.'
   }
 }
 
@@ -759,6 +761,10 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   expandRows: true,
   dayMaxEventRows: true,
   firstDay: settingsStore.firstDay,
+  weekends: settingsStore.showWeekends,
+  weekNumbers: settingsStore.weekNumbers,
+  nowIndicator: settingsStore.nowIndicator,
+  scrollTime: `${String(settingsStore.scrollHour).padStart(2, '0')}:00:00`,
   slotLabelFormat: {
     hour: 'numeric',
     minute: '2-digit',
@@ -793,7 +799,7 @@ function onNewEventClick(): void {
   const start = new Date()
   start.setMinutes(0, 0, 0)
   start.setHours(start.getHours() + 1)
-  const end = new Date(start.getTime() + 60 * 60 * 1000)
+  const end = new Date(start.getTime() + settingsStore.defaultEventLength * 60 * 1000)
   createSlot.value = { start: start.toISOString(), end: end.toISOString(), allDay: false }
   isCreating.value = true
 }
@@ -838,14 +844,31 @@ function onImported(): void {
   void eventsStore.reloadLastRange()
 }
 
+// Pick up changes made from other clients (phone, another tab) without a
+// manual reload: re-check whenever the tab comes back into view, and
+// periodically while it stays visible. Non-forced, so eventsStore's own
+// FRESH_MS window stops this from refetching a range loaded moments ago.
+const AUTO_REFRESH_MS = 5 * 60 * 1000
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined
+
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible') void loadVisibleRange()
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  autoRefreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void loadVisibleRange()
+  }, AUTO_REFRESH_MS)
   await calendarsStore.load()
   await loadVisibleRange()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (autoRefreshTimer !== undefined) clearInterval(autoRefreshTimer)
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
@@ -1238,6 +1261,10 @@ watch(enabledSubscriptionIds, (ids, oldIds) => {
   --fc-today-bg-color: var(--color-primary-soft);
   --fc-neutral-bg-color: var(--color-surface-hover);
   --fc-page-bg-color: var(--color-surface);
+  --fc-neutral-text-color: var(--color-text-muted);
+  --fc-list-event-hover-bg-color: var(--color-surface-hover);
+  --fc-now-indicator-color: var(--color-danger);
+  --fc-highlight-color: color-mix(in srgb, var(--color-primary) 18%, transparent);
   font-family: var(--font-sans);
 }
 .fc .fc-toolbar-title {

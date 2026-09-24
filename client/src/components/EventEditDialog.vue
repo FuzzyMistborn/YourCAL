@@ -2,10 +2,13 @@
 import type { AlarmFields, Calendar, CalendarObject, EventFields } from '@yourcal/shared'
 import { DateTime } from 'luxon'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { REMINDER_PRESETS } from '../lib/reminders.js'
 import { useSessionStore } from '../stores/session.js'
+import { useSettingsStore } from '../stores/settings.js'
 import TimeCombobox from './TimeCombobox.vue'
 
 const session = useSessionStore()
+const settingsStore = useSettingsStore()
 
 const props = defineProps<{
   event: CalendarObject | null // null => creating a new event
@@ -266,7 +269,13 @@ const form = reactive({
   monthlyOrdinal: parsedRepeat.monthlyOrdinal,
   monthlyWeekday: parsedRepeat.monthlyWeekday,
   color: source?.color ?? '',
-  reminders: source?.alarms?.map((a) => a.minutesBefore) ?? [],
+  // A brand-new event (not an edit, not a duplicate/paste) starts with the
+  // user's default reminder, if they've set one.
+  reminders: source
+    ? (source.alarms?.map((a) => a.minutesBefore) ?? [])
+    : settingsStore.defaultReminder !== null
+      ? [settingsStore.defaultReminder]
+      : [],
   // Extra one-off occurrence dates on top of the RRULE -- date-only
   // ('yyyy-LL-dd'), always interpreted in form.timezone like the rest of
   // the form's date/time fields.
@@ -279,16 +288,6 @@ function addRdate(): void {
 function removeRdate(index: number): void {
   form.rdates.splice(index, 1)
 }
-
-const REMINDER_PRESETS: { label: string; minutes: number }[] = [
-  { label: 'At time of event', minutes: 0 },
-  { label: '5 minutes before', minutes: 5 },
-  { label: '10 minutes before', minutes: 10 },
-  { label: '15 minutes before', minutes: 15 },
-  { label: '30 minutes before', minutes: 30 },
-  { label: '1 hour before', minutes: 60 },
-  { label: '1 day before', minutes: 1440 },
-]
 
 function addReminder(): void {
   form.reminders.push(10)

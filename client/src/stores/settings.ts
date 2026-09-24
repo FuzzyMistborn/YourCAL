@@ -21,6 +21,11 @@ export type DefaultCalendarMode = 'fixed' | 'last-used'
 // keep in sync if a view is ever renamed or removed there.
 export type CalendarViewType = 'multiMonthYear' | 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay' | 'listUpcoming'
 
+// 'auto' follows the OS's prefers-color-scheme (live, via matchMedia).
+export type Theme = 'auto' | 'light' | 'dark'
+
+export const DEFAULT_EVENT_LENGTHS = [15, 30, 45, 60, 90, 120] as const
+
 const STORAGE_KEY = 'calendar.weekStart'
 const DEFAULT_CALENDAR_STORAGE_KEY = 'calendar.defaultCalendarId'
 const DEFAULT_CALENDAR_MODE_STORAGE_KEY = 'calendar.defaultCalendarMode'
@@ -29,12 +34,43 @@ const SORT_ORDER_STORAGE_KEY = 'calendar.sortOrder'
 const TIME_FORMAT_STORAGE_KEY = 'calendar.timeFormat'
 const DEFAULT_VISIBLE_CALENDARS_STORAGE_KEY = 'calendar.defaultVisibleCalendarIds'
 const DEFAULT_VIEW_STORAGE_KEY = 'calendar.defaultView'
+const THEME_STORAGE_KEY = 'calendar.theme'
+const NOW_INDICATOR_STORAGE_KEY = 'calendar.nowIndicator'
+const WEEK_NUMBERS_STORAGE_KEY = 'calendar.weekNumbers'
+const SHOW_WEEKENDS_STORAGE_KEY = 'calendar.showWeekends'
+const SCROLL_HOUR_STORAGE_KEY = 'calendar.scrollHour'
+const DEFAULT_EVENT_LENGTH_STORAGE_KEY = 'calendar.defaultEventLength'
+const DEFAULT_REMINDER_STORAGE_KEY = 'calendar.defaultReminder'
 
 const VALID_VIEWS: CalendarViewType[] = ['multiMonthYear', 'dayGridMonth', 'timeGridWeek', 'timeGridDay', 'listUpcoming']
 
 function loadDefaultView(): CalendarViewType {
   const stored = localStorage.getItem(DEFAULT_VIEW_STORAGE_KEY)
   return (VALID_VIEWS as string[]).includes(stored ?? '') ? (stored as CalendarViewType) : 'dayGridMonth'
+}
+
+function loadTheme(): Theme {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  return stored === 'light' || stored === 'dark' ? stored : 'auto'
+}
+
+function loadBoolean(key: string, fallback: boolean): boolean {
+  const stored = localStorage.getItem(key)
+  return stored === null ? fallback : stored === 'true'
+}
+
+// Parses a stored whole number and accepts it only if `valid` agrees --
+// anything missing, malformed, or out of range falls back to the default.
+function loadInt(key: string, fallback: number, valid: (n: number) => boolean): number {
+  const n = Number(localStorage.getItem(key) ?? NaN)
+  return Number.isInteger(n) && valid(n) ? n : fallback
+}
+
+// null = no reminder on new events. Capped at the same 4 weeks the edit
+// dialog's own validation allows.
+function loadDefaultReminder(): number | null {
+  const n = loadInt(DEFAULT_REMINDER_STORAGE_KEY, -1, (m) => m >= 0 && m <= 40320)
+  return n === -1 ? null : n
 }
 
 function loadInitial(): WeekStart {
@@ -77,6 +113,27 @@ export const useSettingsStore = defineStore('settings', () => {
   const timeFormat = ref<TimeFormat>(loadTimeFormat())
   const defaultVisibleCalendarIds = ref<string[]>(loadDefaultVisibleCalendarIds())
   const defaultView = ref<CalendarViewType>(loadDefaultView())
+  const theme = ref<Theme>(loadTheme())
+  const nowIndicator = ref<boolean>(loadBoolean(NOW_INDICATOR_STORAGE_KEY, true))
+  const weekNumbers = ref<boolean>(loadBoolean(WEEK_NUMBERS_STORAGE_KEY, false))
+  const showWeekends = ref<boolean>(loadBoolean(SHOW_WEEKENDS_STORAGE_KEY, true))
+  const scrollHour = ref<number>(loadInt(SCROLL_HOUR_STORAGE_KEY, 8, (h) => h >= 0 && h <= 23))
+  const defaultEventLength = ref<number>(
+    loadInt(DEFAULT_EVENT_LENGTH_STORAGE_KEY, 60, (m) => (DEFAULT_EVENT_LENGTHS as readonly number[]).includes(m)),
+  )
+  const defaultReminder = ref<number | null>(loadDefaultReminder())
+
+  // The resolved theme lands on <html data-theme="light|dark">, which
+  // base.css keys its dark token overrides off. Applied here (not in a
+  // component) so it takes effect as soon as anything -- App.vue, on every
+  // route including login -- first touches the store.
+  const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  function applyTheme(): void {
+    const resolved = theme.value === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : theme.value
+    document.documentElement.dataset.theme = resolved
+  }
+  darkQuery.addEventListener('change', applyTheme)
+  applyTheme()
 
   // FullCalendar's firstDay option: 0 = Sunday, 1 = Monday.
   const firstDay = computed(() => (weekStart.value === 'monday' ? 1 : 0))
@@ -121,6 +178,43 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(DEFAULT_VIEW_STORAGE_KEY, value)
   }
 
+  function setTheme(value: Theme): void {
+    theme.value = value
+    localStorage.setItem(THEME_STORAGE_KEY, value)
+    applyTheme()
+  }
+
+  function setNowIndicator(value: boolean): void {
+    nowIndicator.value = value
+    localStorage.setItem(NOW_INDICATOR_STORAGE_KEY, String(value))
+  }
+
+  function setWeekNumbers(value: boolean): void {
+    weekNumbers.value = value
+    localStorage.setItem(WEEK_NUMBERS_STORAGE_KEY, String(value))
+  }
+
+  function setShowWeekends(value: boolean): void {
+    showWeekends.value = value
+    localStorage.setItem(SHOW_WEEKENDS_STORAGE_KEY, String(value))
+  }
+
+  function setScrollHour(value: number): void {
+    scrollHour.value = value
+    localStorage.setItem(SCROLL_HOUR_STORAGE_KEY, String(value))
+  }
+
+  function setDefaultEventLength(value: number): void {
+    defaultEventLength.value = value
+    localStorage.setItem(DEFAULT_EVENT_LENGTH_STORAGE_KEY, String(value))
+  }
+
+  function setDefaultReminder(value: number | null): void {
+    defaultReminder.value = value
+    if (value === null) localStorage.removeItem(DEFAULT_REMINDER_STORAGE_KEY)
+    else localStorage.setItem(DEFAULT_REMINDER_STORAGE_KEY, String(value))
+  }
+
   return {
     weekStart,
     firstDay,
@@ -139,5 +233,19 @@ export const useSettingsStore = defineStore('settings', () => {
     setDefaultVisibleCalendarIds,
     defaultView,
     setDefaultView,
+    theme,
+    setTheme,
+    nowIndicator,
+    setNowIndicator,
+    weekNumbers,
+    setWeekNumbers,
+    showWeekends,
+    setShowWeekends,
+    scrollHour,
+    setScrollHour,
+    defaultEventLength,
+    setDefaultEventLength,
+    defaultReminder,
+    setDefaultReminder,
   }
 })

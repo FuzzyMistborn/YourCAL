@@ -3,8 +3,12 @@ import { onMounted, onUnmounted } from 'vue'
 import { SESSION_EXPIRED_EVENT } from './api.js'
 import { router } from './router.js'
 import { useSessionStore } from './stores/session.js'
+import { useSettingsStore } from './stores/settings.js'
 
 const session = useSessionStore()
+// Instantiating the settings store applies the saved theme to <html> --
+// done here so it covers every route, the login page included.
+useSettingsStore()
 
 // See api.ts's SESSION_EXPIRED_EVENT doc comment -- this is the one place
 // that reacts to a mid-session 401 by actually taking the user back to
