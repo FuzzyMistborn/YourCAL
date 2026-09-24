@@ -27,6 +27,35 @@
   color-scheme: light;
 }
 
+/* Dark theme. settings.ts resolves the Theme setting ('auto' via
+   prefers-color-scheme) onto <html data-theme>, so only the resolved value
+   needs a rule here. Primary is a touch lighter than light mode's so it
+   reads as text on dark surfaces while still carrying white button text.
+   Screen-only, so printing always gets the light tokens. */
+@media screen {
+  :root[data-theme='dark'] {
+    --color-bg: #15171b;
+    --color-surface: #1e2126;
+    --color-surface-hover: #272b31;
+    --color-border: #2f343b;
+    --color-border-strong: #3b414a;
+    --color-text: #e6e8eb;
+    --color-text-muted: #9aa1ac;
+    --color-text-faint: #6b7280;
+    --color-primary: #5b86ec;
+    --color-primary-hover: #7098f0;
+    --color-primary-soft: #1f2a44;
+    --color-danger: #f06a6a;
+    --color-danger-soft: #3a1e1f;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+
+    color-scheme: dark;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

@@ -36,7 +36,8 @@ support, VALARM reminders, per-event `COLOR`, calendar create / rename /
 delete, read-only calendars, ICS export, calendar sharing (create / accept
 / unsubscribe / owner-side management), SQLite read-cache, calendar sort,
 undo toast, agenda / year / mini-month navigator, duplicate event /
-copy-paste, print view, 12h/24h time format setting.
+copy-paste, print view, 12h/24h time format setting, view options /
+new-event defaults, dark mode, auto-refresh.
 
 ## Toolchain pins
 
@@ -580,6 +581,46 @@ Drag-to-reorder was deferred (needs a new client dep).
 This setting plus "Week starts on" and "Default calendar" live in
 `SettingsDialog.vue` (⚙️ next to sign-out), moved out of the sidebar to
 stop it accumulating loose `<select>`s.
+
+### View options + new-event defaults
+
+All in `settings.ts`, one localStorage key each, fed straight into
+`calendarOptions` in `CalendarView.vue`: show weekends (`weekends`), week
+numbers (`weekNumbers`), current-time line (`nowIndicator`, default on),
+and the hour the day/week view scrolls to (`scrollTime`, default 8).
+"Default event length" only affects the "New event" button (a drag-select
+keeps its dragged length). "Default reminder" seeds `form.reminders` in
+`EventEditDialog.vue` for a brand-new event only -- never an edit or a
+duplicate/paste, which carry their source's alarms. Reminder presets are
+shared between the two dialogs via `client/src/lib/reminders.ts`.
+
+`calendar.defaultVisibleCalendarIds` is in `ACCOUNT_SCOPED_KEYS`
+(`lib/accountStorage.ts`): it's a whitelist of calendar ids, so left behind
+on logout it would hide every calendar of the next user on that browser.
+
+### Theme (dark mode)
+
+`Theme = 'auto' | 'light' | 'dark'` in `settings.ts`. The store resolves
+it (`'auto'` via a live `matchMedia('(prefers-color-scheme: dark)')`
+listener) onto `<html data-theme="light|dark">` as soon as it's created;
+`App.vue` instantiates it so the login page is themed too. An inline
+script in `client/index.html` does the same resolution before first paint
+to avoid a light flash -- keep the two in sync. `base.css` redefines the
+`--color-*` / `--shadow-*` tokens under `:root[data-theme='dark']`, inside
+`@media screen` so printing always uses the light tokens. FullCalendar
+follows automatically through the `--fc-*` → token mapping in
+`CalendarView.vue`'s unscoped `<style>`. Dialog overlays keep their fixed
+translucent backdrop, which works on both themes.
+
+## Auto-refresh
+
+`CalendarView.vue` calls `loadVisibleRange()` when the tab becomes visible
+again (`visibilitychange`) and every 5 min while visible
+(`AUTO_REFRESH_MS`). Non-forced, so `eventsStore`'s 30s `FRESH_MS` window
+dedupes it against a load that just happened. Subscriptions refresh along
+with calendars. The calendar *list* itself isn't re-fetched -- a calendar
+created on another client still needs a reload. A failed background load
+doesn't overwrite an error banner that's already showing.
 
 ## Agenda / year views + mini-month navigator
 
