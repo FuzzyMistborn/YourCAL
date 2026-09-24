@@ -2,6 +2,7 @@ import type { Calendar, UpdateCalendarInput } from '@yourcal/shared'
 import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
 import { api } from '../api.js'
+import { useSettingsStore } from './settings.js'
 
 const COLOR_OVERRIDE_KEY = 'calendar.colorOverrides'
 // v2: the original key stored dismissal timestamps from the browser's own
@@ -54,8 +55,11 @@ export const useCalendarsStore = defineStore('calendars', () => {
     loading.value = true
     try {
       calendars.value = await api.listCalendars()
+      const defaultVisibleIds = useSettingsStore().defaultVisibleCalendarIds
       for (const cal of calendars.value) {
-        if (!(cal.id in enabled)) enabled[cal.id] = true
+        if (!(cal.id in enabled)) {
+          enabled[cal.id] = defaultVisibleIds.length === 0 || defaultVisibleIds.includes(cal.id)
+        }
       }
     } finally {
       loading.value = false
