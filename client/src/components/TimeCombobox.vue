@@ -84,7 +84,7 @@ watch(query, () => {
 })
 
 const filteredOptions = computed<Option[]>(() => {
-  if (!hasEdited.value) return OPTIONS
+  if (!hasEdited.value) return OPTIONS.value
   const normalized = query.value.toLowerCase().replace(/[^a-z0-9]/g, '')
   if (!normalized) return OPTIONS.value
   const matches = OPTIONS.value.filter((o) => o.searchKey.includes(normalized))
