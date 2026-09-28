@@ -10,21 +10,21 @@
   },
   "dependencies": {
     "@yourcal/shared": "*",
-    "@fastify/secure-session": "^8.1.1",
+    "@fastify/secure-session": "^8.4.0",
     "@fastify/static": "^10.1.4",
     "@touch4it/ical-timezones": "^1.9.0",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.5",
     "ical.js": "^2.1.0",
     "luxon": "^3.5.0",
-    "tsdav": "^2.3.3",
+    "tsdav": "^2.3.4",
     "xml-js": "1.6.11"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/luxon": "^3.7.5",
-    "@types/node": "^26.6.1",
-    "tsx": "^4.23.13",
-    "vitest": "^5.0.1"
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "vitest": "^5.0.2"
   }
 }
